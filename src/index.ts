@@ -46,7 +46,7 @@ export function getSharedMcpClient(): InstagramMcpClient | null {
 }
 
 export const name = 'instagram-mcp'
-export const inject = ['tools']
+export const inject = ['tools', 'webServer']
 
 // 載入 schemastery
 const zInstance = await loadSchemastery()
@@ -69,7 +69,7 @@ export function apply(ctx: any, userConfig: Partial<InstagramMcpConfig> = {}) {
     return {}
   })()
 
-  const activeConfig: InstagramMcpConfig = sanitizeMcpConfig({
+  let activeConfig: InstagramMcpConfig = sanitizeMcpConfig({
     ...defaultMcpConfig,
     ...userConfig,
     ...localSavedConfig,
@@ -153,25 +153,30 @@ export function apply(ctx: any, userConfig: Partial<InstagramMcpConfig> = {}) {
       log('✅ Python FastMCP 伺服器握手成功！')
 
       // 4. 若已配置登入資訊或存在 Session 快取，嘗試登入
-      const sessionAbsPath = join(pluginRoot, activeConfig.sessionPath || 'data/ig_session.json')
+      const sessFile = join(pluginRoot, activeConfig.sessionPath || 'data/ig_session.json')
       const loginRes = await mcpClient.igLogin({
         username: activeConfig.username,
         password: activeConfig.password,
-        session_path: sessionAbsPath,
+        session_path: sessFile,
         two_factor_code: activeConfig.twoFactorCode,
         proxy_url: activeConfig.proxyUrl,
       })
 
       if (loginRes?.ok) {
+        const loggedUser = loginRes.username || activeConfig.username || ''
         service.setLoginStatus({
           ok: true,
           method: loginRes.method,
-          message: `已登入 (${loginRes.method === 'session' ? 'Session 快取' : '帳號密碼'}) - @${loginRes.username || activeConfig.username}`,
+          username: loggedUser,
+          user_id: loginRes.user_id,
+          sessionPath: sessFile,
+          message: `已登入 (${loginRes.method === 'session' ? 'Session 快取' : '帳號密碼'}) - @${loggedUser}`,
         })
         log(`🎉 Instagram 登入就緒！${service.loginStatus.message}`)
       } else {
         service.setLoginStatus({
           ok: false,
+          sessionPath: sessFile,
           message: loginRes?.message || '等待登入或驗證憑證',
         })
         log(`ℹ️ ${service.loginStatus.message}`)
@@ -187,6 +192,140 @@ export function apply(ctx: any, userConfig: Partial<InstagramMcpConfig> = {}) {
 
   if (activeConfig.autoStart !== false) {
     initEngine().catch((e) => log(`initEngine unhandled error: ${e.message}`))
+  }
+
+  // ==========================================================================
+  // WebServer API 註冊 (提供 client.js 設定面板讀寫與狀態查詢)
+  // ==========================================================================
+  const sendJson = (res: any, status: number, data: any) => {
+    res.writeHead(status, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+    })
+    res.end(JSON.stringify(data))
+  }
+
+  const readBody = (req: any): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      let body = ''
+      req.on('data', (chunk: any) => (body += chunk))
+      req.on('end', () => {
+        try {
+          resolve(body ? JSON.parse(body) : {})
+        } catch (e) {
+          reject(e)
+        }
+      })
+      req.on('error', reject)
+    })
+  }
+
+  const handleMcpRequest = async (req: any, res: any) => {
+    try {
+      const url = new URL(req.url, 'http://127.0.0.1')
+      const pathname = url.pathname
+
+      // 讀取當前 FastMCP 配置
+      if (req.method === 'GET' && pathname === '/api/instagram/mcp/config') {
+        return sendJson(res, 200, { ok: true, config: activeConfig })
+      }
+
+      // 更新並持久化 FastMCP 配置
+      if (req.method === 'POST' && pathname === '/api/instagram/mcp/config') {
+        const body = await readBody(req)
+        activeConfig = sanitizeMcpConfig({ ...activeConfig, ...body })
+        try {
+          writeFileSync(configFile, JSON.stringify(activeConfig, null, 2), 'utf-8')
+        } catch (e) {
+          console.error('[IG-MCP] 儲存 config.json 失敗:', e)
+        }
+        return sendJson(res, 200, { ok: true, config: activeConfig })
+      }
+
+      // 讀取 FastMCP 服務運行狀態
+      if (req.method === 'GET' && pathname === '/api/instagram/mcp/status') {
+        const sessFile = join(pluginRoot, activeConfig.sessionPath || 'data/ig_session.json')
+        return sendJson(res, 200, {
+          ok: true,
+          mcpRunning: Boolean(mcpClient?.isRunning),
+          mcpReady: Boolean(mcpClient?.ready),
+          loginStatus: service.loginStatus,
+          sessionExists: existsSync(sessFile),
+          sessionPath: activeConfig.sessionPath,
+          pythonPath: activeConfig.pythonPath,
+        })
+      }
+
+      // 重啟 FastMCP 子進程
+      if (req.method === 'POST' && pathname === '/api/instagram/mcp/restart') {
+        log('收到重啟 FastMCP 請求，正在關閉舊子進程...')
+        if (mcpClient) {
+          await mcpClient.stop().catch(() => {})
+          mcpClient = null
+          service.setClient(null)
+        }
+        await initEngine()
+        return sendJson(res, 200, {
+          ok: true,
+          message: 'FastMCP 服務已重啟',
+          loginStatus: service.loginStatus,
+        })
+      }
+
+      // 測試登入
+      if (req.method === 'POST' && pathname === '/api/instagram/mcp/login') {
+        const body = await readBody(req)
+        const sessFile = join(pluginRoot, activeConfig.sessionPath || 'data/ig_session.json')
+        if (!mcpClient || !mcpClient.ready) {
+          return sendJson(res, 503, { ok: false, error: 'FastMCP 尚未就緒' })
+        }
+        const loginRes = await mcpClient.igLogin({
+          username: body.username || activeConfig.username,
+          password: body.password || activeConfig.password,
+          session_path: sessFile,
+          two_factor_code: body.twoFactorCode || activeConfig.twoFactorCode,
+          proxy_url: body.proxyUrl || activeConfig.proxyUrl,
+        })
+        if (loginRes?.ok) {
+          const loggedUser = loginRes.username || activeConfig.username || body.username || ''
+          service.setLoginStatus({
+            ok: true,
+            method: loginRes.method,
+            username: loggedUser,
+            user_id: loginRes.user_id,
+            sessionPath: sessFile,
+            message: `已登入 (${loginRes.method === 'session' ? 'Session 快取' : '帳號密碼'}) - @${loggedUser}`,
+          })
+        } else {
+          service.setLoginStatus({
+            ok: false,
+            sessionPath: sessFile,
+            message: loginRes?.message || '登入失敗',
+          })
+        }
+        return sendJson(res, 200, { ok: Boolean(loginRes?.ok), loginStatus: service.loginStatus, result: loginRes })
+      }
+
+      return sendJson(res, 404, { ok: false, error: 'Not found' })
+    } catch (e: any) {
+      return sendJson(res, 500, { ok: false, error: e.message })
+    }
+  }
+
+  const webServer = (typeof ctx.get === 'function' ? ctx.get('webServer') : undefined) || ctx.webServer
+  if (webServer) {
+    try {
+      if (typeof webServer.register === 'function') {
+        webServer.register({
+          kind: 'prefix',
+          path: '/api/instagram/mcp',
+          handler: handleMcpRequest,
+        })
+        log('✅ 已註冊 FastMCP Web API 路由: /api/instagram/mcp')
+      }
+    } catch (e: any) {
+      log(`註冊 Web API 異常: ${e.message}`)
+    }
   }
 
   // 4. 優雅卸載清理

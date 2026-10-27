@@ -4,6 +4,6 @@
 
 - insert:
     - id: instagram-mcp
-      name: dsh-instagram-mcp
+      name: '@luoyi-dsh/instagram-mcp'
       config:
         enabled: true

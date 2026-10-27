@@ -19,6 +19,12 @@ export function registerMcpTools(
       ...toolDef,
       output: {
         schema: { type: 'object' },
+        render: (_args: any, value: any) => [
+          {
+            type: 'text',
+            text: typeof value === 'string' ? value : JSON.stringify(value, null, 2),
+          },
+        ],
       },
     }
     try {

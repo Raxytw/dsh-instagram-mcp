@@ -1,6 +1,6 @@
 {
   "name": "@luoyi-dsh/instagram-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "DeepSeek Harness (DSH) Instagram FastMCP 核心服務插件：提供 Python FastMCP 子進程管理、Session 會話維持、與 Instagram MCP 工具標準介面",
   "keywords": [
     "dsh",
@@ -17,6 +17,14 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
     }
   },
   "exports": {
@@ -25,10 +33,12 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./client": "./client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "client.js",
     "cordis.patch.yml",
     "vendor",
     "!**/data/**",

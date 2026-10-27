@@ -1,38 +1,46 @@
-# DSH Instagram FastMCP 核心服務插件 (`@luoyi-dsh/instagram-mcp`)
+# DSH Instagram FastMCP Core Service Plugin (`@luoyi-dsh/instagram-mcp`)
 
-![Banner](assets/banner.png)
+<div align="center">
 
-> **DeepSeek Harness (DSH)** 官方底層 Instagram 核心服務外掛。  
-> 負責自動管理獨立的 Python FastMCP 子進程、維持登入 Session 憑證，並向 DSH Tools 與其他外掛提供標準 Model Context Protocol (MCP) 操作介面。
+![DSH Instagram MCP Banner](assets/banner.png)
 
----
+**[English](README.md) | [繁體中文](README.zh-Hant.md)**
 
-## 🌟 核心特性
+</div>
 
-1. **Python 虛擬環境自動維護**：
-   - 自動檢測系統 Python / `uv` 環境。
-   - 自動於插件目錄建立獨立 `.venv` 並安裝依賴清單 (`instagrapi`, `mcp<2`, `pydantic` 等)。
-2. **FastMCP Stdio 子進程生命週期**：
-   - 以 MCP 標準 Stdio 通訊協定管理 Python 伺服器子進程。
-   - 支援優雅重啟、斷線重連與進程清理。
-3. **Instagram Session 持久化與雙重驗證**：
-   - 支援帳號密碼登入、Session 快取載入 (`data/ig_session.json`) 與 2FA 驗證碼挑戰。
-4. **全域單例共享服務 (Zero-Error Singleton)**：
-   - 導出 `getSharedMcpService()` 與 `getSharedMcpClient()`，供業務層插件 (`dsh-instagram-plugin`、`dsh-instagram-scroll`) 安全共享底層連線與登入狀態，完全免除 Cordis 的屬性存取拋錯。
-5. **標準 MCP Tools 註冊**：
-   - 向 DSH `ctx.tools` 註冊 9 項 Instagram 核心底層工具，供 AI 主模型直接調用。
+> Official foundational Instagram FastMCP service plugin for **DeepSeek Harness (DSH)**.  
+> Manages the Python FastMCP child process lifecycle, maintains persistent Instagram session credentials and 2FA challenges, and provides standard Model Context Protocol (MCP) tools for DSH AI models and consumer plugins.
 
 ---
 
-## 📦 安裝方式
+## 🌟 Key Features
 
-使用 DSH CLI 安裝外掛：
+1. **Automated Python Environment Management**:
+   - Auto-detects host Python or `uv` environments.
+   - Automatically initializes an isolated `.venv` within the vendor directory and provisions all dependencies (`instagrapi`, `mcp<2`, `pydantic`, etc.).
+2. **FastMCP Stdio Subprocess Lifecycle**:
+   - Manages Python MCP server over standard stdio protocol.
+   - Supports graceful restarts, reconnection handling, and automatic process teardown on shutdown.
+3. **Session Persistence & 2FA Handling**:
+   - Supports username/password authentication, persistent session cache reuse (`data/ig_session.json`), and interactive two-factor authentication (2FA) challenges.
+4. **Zero-Error Shared Singleton Service**:
+   - Exports `getSharedMcpService()` and `getSharedMcpClient()`, enabling consumer plugins (`dsh-instagram-plugin`, `dsh-instagram-scroll`) to safely access underlying connections and login state without Cordis property access errors.
+5. **9 Standard Model Context Protocol (MCP) Tools**:
+   - Registers 9 core Instagram primitives with DSH `ctx.tools` for direct AI function calling.
+6. **Dedicated Web REST API**:
+   - Exposes `/api/instagram/mcp/*` endpoints to read/update configuration, query live daemon and login health, reboot the subprocess, and perform credential checks.
+
+---
+
+## 📦 Installation
+
+Install via DSH Plugin CLI:
 
 ```bash
 dsh plugin --profile web add @luoyi-dsh/instagram-mcp
 ```
 
-或透過 npm 安裝：
+Or via standard npm:
 
 ```bash
 npm install @luoyi-dsh/instagram-mcp
@@ -40,105 +48,149 @@ npm install @luoyi-dsh/instagram-mcp
 
 ---
 
-## 🛠️ 提供之 9 項標準 MCP 工具
+## 🛠️ Provided MCP Tools (9 Core Primitives)
 
-| 工具名稱 | 說明 | 參數 |
+| Tool Name | Description | Parameters |
 | :--- | :--- | :--- |
-| **`ig_check_status`** | 檢查 FastMCP 服務狀態與當前 Instagram 登入情形 | 無 |
-| **`ig_login`** | 登入 Instagram 帳號或重新驗證 Session 快取 | `username`, `password`, `two_factor_code`, `proxy_url` |
-| **`ig_search_hashtag`** | 搜尋指定 Hashtag 標籤之精選/最新貼文清單 | `hashtag` (string), `limit` (number) |
-| **`ig_get_post_context`** | 抓取指定貼文之完整內文、發布者資訊與相鄰留言上下文 | `media_pk` (string), `comment_limit` (number) |
-| **`ig_post_comment`** | 於指定貼文發表新留言，或對特定留言進行巢狀回覆 | `media_pk` (string), `text` (string), `reply_to_comment_pk` (可選) |
-| **`ig_get_unread_dms`** | 讀取最新或未讀之 Instagram 私訊對話線程 | `limit` (number) |
-| **`ig_send_dm`** | 發送 Instagram Direct Message 私訊給特定線程 | `thread_id` (string), `text` (string) |
-| **`ig_get_timeline_feed`** | 抓取使用者首頁動態牆 (Timeline Feed) 貼文清單 | `limit` (number) |
-| **`ig_like_media`** | 對指定的 Instagram 貼文按讚 | `media_pk` (string) |
+| **`ig_check_status`** | Check FastMCP service status and current Instagram login details | None |
+| **`ig_login`** | Authenticate Instagram account or validate existing session cache | `username`, `password`, `two_factor_code`, `proxy_url` |
+| **`ig_search_hashtag`** | Search top and recent posts for a specified hashtag | `hashtag` (string), `limit` (number) |
+| **`ig_get_post_context`** | Fetch complete post caption, author metadata, and adjacent comments | `media_pk` (string), `comment_limit` (number) |
+| **`ig_post_comment`** | Publish a comment or reply to an existing comment on a post | `media_pk` (string), `text` (string), `reply_to_comment_pk` (optional) |
+| **`ig_get_unread_dms`** | Read unread or latest Instagram direct message threads | `limit` (number) |
+| **`ig_send_dm`** | Send a direct message to a specific thread | `thread_id` (string), `text` (string) |
+| **`ig_get_timeline_feed`** | Retrieve posts from user's timeline feed | `limit` (number) |
+| **`ig_like_media`** | Like a specific Instagram post | `media_pk` (string) |
 
 ---
 
-## 💻 使用範例
+## 💻 Usage Examples
 
-### 1. DSH AI 自然語言直接調用
+### 1. Natural Language Invocation in DSH Chat
 
-在 DSH 對話中，AI 模型會根據上下文自動調用合適的 MCP 工具：
+In DSH conversations, the host model automatically determines and calls appropriate MCP tools:
 
-- **搜尋標籤**：「幫我搜尋 Instagram 上關於 #deepseek 標籤的最新 5 則貼文」
-- **貼文內文與留言**：「這篇貼文 PK 是 3123456789012345678，幫我看完整內文與留言」
-- **發表留言**：「在貼文 3123456789012345678 下留言：『架構非常完整，感謝分享！』」
-- **檢查私訊**：「查看我目前有沒有未讀的 Instagram 私訊」
-- **發送私訊**：「發送私訊給線程 17841400000000000 說：『您好，已收到您的諮詢！』」
+- **Search Hashtags**: "Search for the top 5 recent posts under #deepseek on Instagram."
+- **Inspect Post Details**: "Look up post PK 3123456789012345678 and show me the full caption and comments."
+- **Leave Comments**: "Comment on post 3123456789012345678: 'Great architecture overview, thanks for sharing!'"
+- **Check DMs**: "Check if I have any unread direct messages on Instagram."
+- **Send Direct Message**: "Send a DM to thread 17841400000000000 saying: 'Hello, inquiry received!'"
 
-### 2. TypeScript / Node.js 跨插件調用
+### 2. Via HTTP REST API (DSH Web Routes)
 
-其他 DSH 外掛（如業務層擴充插件）可直接匯入單例客戶端：
+> 💡 **Tip**: Default DSH Web port is **3080**.
+
+- **Read Configuration**:
+  ```bash
+  curl http://127.0.0.1:3080/api/instagram/mcp/config
+  ```
+
+- **Update Configuration**:
+  ```bash
+  curl -X POST http://127.0.0.1:3080/api/instagram/mcp/config \
+    -H "Content-Type: application/json" \
+    -d '{"autoStart":true}'
+  ```
+
+- **Get Service Health & Login Status**:
+  ```bash
+  curl http://127.0.0.1:3080/api/instagram/mcp/status
+  ```
+
+- **Restart FastMCP Subprocess**:
+  ```bash
+  curl -X POST http://127.0.0.1:3080/api/instagram/mcp/restart
+  ```
+
+- **Perform Login / 2FA Challenge**:
+  ```bash
+  curl -X POST http://127.0.0.1:3080/api/instagram/mcp/login \
+    -H "Content-Type: application/json" \
+    -d '{"username":"your_user","password":"your_password"}'
+  ```
+
+### 3. Cross-Plugin TypeScript / Node.js API
+
+Consumer DSH plugins can directly import and call the shared client:
 
 ```typescript
 import { getSharedMcpClient } from '@luoyi-dsh/instagram-mcp'
 
 const mcpClient = getSharedMcpClient()
 if (mcpClient && mcpClient.ready) {
-  // 搜尋指定標籤
+  // Search hashtag
   const posts = await mcpClient.igSearchHashtag('tech', 10)
 
-  // 抓取貼文詳細內容
+  // Fetch post details
   const context = await mcpClient.igGetPostContext('3123456789012345678', 5)
 
-  // 發送私訊
+  // Send Direct Message
   await mcpClient.igSendDm({
     thread_id: '17841400000000000',
-    text: '感謝您的來訊！',
+    text: 'Thanks for reaching out!',
   })
 }
 ```
 
 ---
 
-## ⚙️ 設定參數說明
+## ⚙️ Configuration Parameters
 
-可於 DSH 設定面板或插件目錄下的 `data/config.json` 中配置：
+Configurable via the DSH Web UI or `data/config.json`:
 
-| 欄位名稱 | 型別 | 預設值 | 說明 |
+| Field | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| **`username`** | string | `""` | Instagram 使用者名稱 |
-| **`password`** | string | `""` | Instagram 登入密碼（存在有效 Session 時可留空） |
-| **`twoFactorCode`** | string | `""` | 2FA 雙步驟驗證碼 |
-| **`sessionPath`** | string | `"data/ig_session.json"` | Session 快取檔案路徑 |
-| **`proxyUrl`** | string | `""` | 代理伺服器 URL（例如 `http://127.0.0.1:7890`，選填） |
-| **`pythonPath`** | string | `""` | 自訂 Python 可執行檔路徑（留空則自動探測系統 Python / uv） |
-| **`autoStart`** | boolean | `true` | 啟動 DSH 時是否自動啟動 FastMCP 子進程並嘗試登入 |
+| **`username`** | string | `""` | Instagram username |
+| **`password`** | string | `""` | Instagram password (can be left blank if valid session exists) |
+| **`twoFactorCode`** | string | `""` | 2FA two-step verification code |
+| **`sessionPath`** | string | `"data/ig_session.json"` | Path to the session cache file |
+| **`proxyUrl`** | string | `""` | Outbound proxy URL (e.g. `http://127.0.0.1:7890`, optional) |
+| **`pythonPath`** | string | `""` | Custom Python binary path (auto-detects Python / uv if blank) |
+| **`autoStart`** | boolean | `true` | Automatically launch FastMCP subprocess and authenticate on startup |
 
 ---
 
-## 📁 目錄結構
+## 📁 Directory Structure
 
 ```text
 dsh-instagram-mcp/
-├── cordis.patch.yml               # DSH bundle patch 宣告
-├── package.json                   # 模組定義與依賴宣告
-├── tsconfig.json                  # TypeScript 編譯設定
+├── cordis.patch.yml               # DSH bundle patch manifest
+├── package.json                   # Module definitions and dependencies
+├── tsconfig.json                  # TypeScript compiler configuration
+├── CHANGELOG.md                   # Version release notes
+├── README.md                      # English documentation (This file)
+├── README.zh-Hant.md              # Traditional Chinese documentation
 ├── assets/
-│   └── banner.png                 # 宣傳圖示與橫幅
+│   ├── banner.png                 # Promotional banner
+│   └── zh-Hant.md                 # Localized documentation
+├── client.js                      # DSH Web UI control panel
 ├── vendor/
-│   └── instagram-mcp/             # 獨立 Python FastMCP 核心模組
-│       ├── requirements.txt       # Python 依賴清單
-│       ├── server.py              # FastMCP Stdio 伺服器入口
-│       ├── auth.py                # 帳號認證、Session 復原與 2FA
-│       └── core.py                # 貼文、留言、私訊、標籤等核心操作
+│   └── instagram-mcp/             # Standalone Python FastMCP core
+│       ├── requirements.txt       # Python dependencies
+│       ├── server.py              # FastMCP Stdio server entrypoint
+│       ├── auth.py                # Authentication, session restoration & 2FA
+│       └── core.py                # Core operations (posts, comments, DMs, tags)
 └── src/
-    ├── index.ts                   # 外掛入口與單例服務掛載
-    ├── service.ts                 # InstagramMcpService 服務狀態管理器
-    ├── config.ts                  # Schemastery 設定模型定義
-    ├── types.ts                   # 型別與資料結構宣告
+    ├── index.ts                   # Plugin entrypoint, singleton service, and REST API
+    ├── service.ts                 # InstagramMcpService runtime status manager
+    ├── config.ts                  # Schemastery config schema
+    ├── types.ts                   # TypeScript interfaces
     ├── lib/
-    │   ├── env.ts                 # Python 虛擬環境檢查與依賴安裝
-    │   ├── mcp.ts                 # FastMCP Client 子進程通訊封裝
-    │   └── hostdeps.ts            # DSH 宿主相容層
+    │   ├── env.ts                 # Python venv validation & package installer
+    │   ├── mcp.ts                 # FastMCP client subprocess wrapper
+    │   └── hostdeps.ts            # DSH runtime compatibility layer
     └── tools/
-        └── mcpTools.ts            # 向 DSH Tools 註冊之 9 項核心工具
+        └── mcpTools.ts            # 9 core MCP tools registration
 ```
 
 ---
 
-## 📄 授權條款
+## 📜 Releases & Changelog
 
-本專案採用 [MIT License](LICENSE) 開源授權。
+For detailed release history and changes, please refer to [CHANGELOG.md](CHANGELOG.md).
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).

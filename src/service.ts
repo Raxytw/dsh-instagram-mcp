@@ -7,7 +7,14 @@ import { InstagramMcpConfig } from './config.js'
 
 export class InstagramMcpService {
   public client: InstagramMcpClient | null = null
-  public loginStatus: { ok: boolean; message: string; method?: string } = {
+  public loginStatus: {
+    ok: boolean
+    message: string
+    method?: string
+    username?: string
+    user_id?: string
+    sessionPath?: string
+  } = {
     ok: false,
     message: '未連線或尚未檢查',
   }
@@ -32,7 +39,14 @@ export class InstagramMcpService {
     this.client = client
   }
 
-  public setLoginStatus(status: { ok: boolean; message: string; method?: string }) {
+  public setLoginStatus(status: {
+    ok: boolean
+    message: string
+    method?: string
+    username?: string
+    user_id?: string
+    sessionPath?: string
+  }) {
     this.loginStatus = status
   }
 }
