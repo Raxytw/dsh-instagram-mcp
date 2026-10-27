@@ -1,0 +1,64 @@
+{
+  "name": "@luoyi-dsh/instagram-mcp",
+  "version": "1.0.0",
+  "description": "DeepSeek Harness (DSH) Instagram FastMCP 核心服務插件：提供 Python FastMCP 子進程管理、Session 會話維持、與 Instagram MCP 工具標準介面",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "instagram",
+    "mcp",
+    "fastmcp"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "cordis.patch.yml",
+    "vendor",
+    "!**/data/**",
+    "!**/__pycache__/**",
+    "!**/.venv/**"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.5",
+    "@modelcontextprotocol/sdk": "^1.6.0",
+    "dotenv": "^16.4.7"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "*",
+    "cordis": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  },
+  "author": {
+    "name": "Raxytw",
+    "url": "https://github.com/Raxytw"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Raxytw/dsh-instagram-mcp.git"
+  },
+  "private": false
+}
