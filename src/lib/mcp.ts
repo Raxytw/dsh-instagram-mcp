@@ -3,6 +3,9 @@
  */
 
 import { ChildProcess, spawn } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import {
   InstagramLoginResult,
   InstagramPost,
@@ -258,7 +261,46 @@ export class InstagramMcpClient {
     jitter_min?: number
     jitter_max?: number
   }): Promise<{ ok: boolean; comment_pk?: string; error?: string; in_cooldown?: boolean; cooldown_remaining_sec?: number }> {
-    return this.callTool('ig_post_comment', params, 45000)
+    const isTopLevelComment = !params.reply_to_comment_pk || !String(params.reply_to_comment_pk).trim()
+    const cleanPk = String(params.media_pk || '').split('_')[0].trim()
+    const dshHome = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || homedir(), '.dsh')
+    const sharedSentPath = join(dshHome, 'instagram-sent-media.json')
+
+    if (isTopLevelComment && cleanPk) {
+      const memSet: Set<string> = ((globalThis as any).__DSH_IG_TOP_COMMENT_PKS__ ||= new Set<string>())
+      if (memSet.has(cleanPk)) {
+        this.log(`[MCP Client] ⏭️ 攔截重複頂層留言：貼文/Reel (${cleanPk}) 本次會話已發送過推坑留言`)
+        return { ok: false, error: `貼文或 Reel (${cleanPk}) 已經發送過留言，禁止重複發送` }
+      }
+      try {
+        if (existsSync(sharedSentPath)) {
+          const reg = JSON.parse(readFileSync(sharedSentPath, 'utf-8'))
+          if (reg?.sentPks?.[cleanPk]) {
+            memSet.add(cleanPk)
+            this.log(`[MCP Client] ⏭️ 攔截重複頂層留言：貼文/Reel (${cleanPk}) 已存在於全域永久已發送清單`)
+            return { ok: false, error: `貼文或 Reel (${cleanPk}) 已經發送過留言，禁止重複發送` }
+          }
+        }
+      } catch {}
+      memSet.add(cleanPk)
+      try {
+        if (!existsSync(dshHome)) mkdirSync(dshHome, { recursive: true })
+        const reg = existsSync(sharedSentPath)
+          ? JSON.parse(readFileSync(sharedSentPath, 'utf-8'))
+          : { version: 1, updatedAt: '', sentPks: {}, sentCodes: {}, sentFingerprints: {}, seenPks: {}, seenCodes: {} }
+        reg.sentPks = reg.sentPks || {}
+        reg.seenPks = reg.seenPks || {}
+        const nowIso = new Date().toISOString()
+        reg.sentPks[cleanPk] = reg.sentPks[cleanPk] || { timestamp: nowIso, source: 'mcp-post-comment' }
+        reg.seenPks[cleanPk] = reg.seenPks[cleanPk] || { timestamp: nowIso, source: 'mcp-post-comment' }
+        reg.updatedAt = nowIso
+        const tmp = `${sharedSentPath}.tmp`
+        writeFileSync(tmp, JSON.stringify(reg, null, 2), 'utf-8')
+        renameSync(tmp, sharedSentPath)
+      } catch {}
+    }
+
+    return this.callTool('ig_post_comment', { ...params, media_pk: cleanPk || params.media_pk }, 45000)
   }
 
   public async igGetUnreadDms(limit = 10): Promise<{ ok: boolean; threads: InstagramDmThread[] }> {
