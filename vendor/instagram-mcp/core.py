@@ -3,20 +3,145 @@ import random
 import time
 from typing import List, Dict, Any, Optional
 from instagrapi import Client
+from instagrapi.exceptions import (
+    FeedbackRequired,
+    PleaseWaitFewMinutes,
+    RateLimitError,
+    SentryBlock,
+    ChallengeRequired,
+    LoginRequired,
+)
 
 logger = logging.getLogger("instagram_mcp.core")
 
 
+class AntiRiskManager:
+    """
+    Instagram 防風控安全管理員 (Anti-Risk Control Circuit Breaker)
+    ============================================================================
+    核心防護能力：
+    1. 異常熔斷冷卻 (Circuit Breaker)：
+       當偵測到 Instagram 官方風控訊號（如 FeedbackRequired 即 Action Blocked、
+       PleaseWaitFewMinutes、RateLimitError、SentryBlock）時，自動觸發 15~60 分鐘冷卻保護模式，
+       立刻中斷並阻絕後續所有寫入操作（留言、發訊、點讚），防止帳號被永久封禁。
+    2. 小時頻次防護 (Hourly Write Cap)：
+       嚴格限制單一小時內累計的寫入動作次數（預設上限 15 次），避免頻繁高頻行為被官方演算法標記為機器人。
+    3. 動作間隔節奏控制 (Pacing & Spacing)：
+       維持相鄰寫入動作間人造隨機延遲，並在讀取與滾動時注入擬真微延遲。
+    ============================================================================
+    """
+
+    def __init__(self, hourly_write_cap: int = 15, cooldown_minutes: int = 30):
+        self.hourly_write_cap = hourly_write_cap
+        self.default_cooldown_minutes = cooldown_minutes
+        self.cooldown_until: float = 0.0
+        self.cooldown_reason: str = ""
+        self.action_history: List[Dict[str, Any]] = []
+        self.last_write_timestamp: float = 0.0
+
+    def is_in_cooldown(self) -> bool:
+        return time.time() < self.cooldown_until
+
+    def get_cooldown_remaining(self) -> int:
+        return max(0, int(self.cooldown_until - time.time()))
+
+    def trigger_cooldown(self, minutes: Optional[int] = None, reason: str = ""):
+        dur = minutes if minutes is not None else self.default_cooldown_minutes
+        self.cooldown_until = time.time() + (dur * 60)
+        self.cooldown_reason = reason
+        expire_str = time.strftime("%H:%M:%S", time.localtime(self.cooldown_until))
+        logger.error(
+            f"🚨 [防風控熔斷生效] 帳號進入冷卻保護模式 {dur} 分鐘（預計至 {expire_str} 解除）！\n"
+            f"   原因: {reason}\n"
+            f"   ⚠️ 在此冷卻期間，系統將自動攔截所有留言、點讚、私訊等寫入行為，以保全帳號免遭 Instagram 永久停權！"
+        )
+
+    def reset_cooldown(self):
+        self.cooldown_until = 0.0
+        self.cooldown_reason = ""
+        logger.info("🛡️ [防風控] 手動清除冷卻保護狀態。")
+
+    def _clean_history(self):
+        cutoff = time.time() - 3600
+        self.action_history = [item for item in self.action_history if item.get("time", 0) >= cutoff]
+
+    def get_hourly_action_count(self, action_type: Optional[str] = None) -> int:
+        self._clean_history()
+        if action_type:
+            return sum(1 for item in self.action_history if item.get("type") == action_type)
+        return len(self.action_history)
+
+    def check_write_permission(self, action_type: str = "write") -> Dict[str, Any]:
+        """檢查是否允許執行寫入行為"""
+        if self.is_in_cooldown():
+            rem = self.get_cooldown_remaining()
+            return {
+                "allowed": False,
+                "in_cooldown": True,
+                "remaining_seconds": rem,
+                "reason": (
+                    f"帳號目前處於防風控冷卻保護中（剩餘 {rem} 秒）。"
+                    f"觸發原因：{self.cooldown_reason or 'Instagram 官方頻率限制或功能阻擋'}。"
+                    f"為防止帳號被永久封禁，已自動攔截寫入操作。"
+                ),
+            }
+
+        self._clean_history()
+        if len(self.action_history) >= self.hourly_write_cap:
+            return {
+                "allowed": False,
+                "in_cooldown": False,
+                "remaining_seconds": 0,
+                "reason": (
+                    f"已達到防風控小時寫入上限（最近 1 小時內已執行 {len(self.action_history)} 次，上限 {self.hourly_write_cap} 次）。"
+                    f"已自動延緩後續寫入動作，保護帳號安全。"
+                ),
+            }
+
+        return {"allowed": True, "in_cooldown": False}
+
+    def record_action(self, action_type: str, details: str = ""):
+        self._clean_history()
+        now = time.time()
+        self.last_write_timestamp = now
+        self.action_history.append({
+            "type": action_type,
+            "time": now,
+            "details": details,
+        })
+
+    def get_status(self) -> Dict[str, Any]:
+        self._clean_history()
+        return {
+            "in_cooldown": self.is_in_cooldown(),
+            "cooldown_remaining_sec": self.get_cooldown_remaining(),
+            "cooldown_reason": self.cooldown_reason,
+            "hourly_write_count": len(self.action_history),
+            "hourly_write_cap": self.hourly_write_cap,
+            "last_write_timestamp": self.last_write_timestamp,
+        }
+
+
 class InstagramCore:
-    """Instagram 核心業務邏輯封裝 (搜尋、純瀏覽、Reel、貼文詳情、留言、私訊與防風控 Jitter)"""
+    """Instagram 核心業務邏輯封裝 (搜尋、純瀏覽、Reel、貼文詳情、留言、私訊與多重防風控保護)"""
 
-    def __init__(self, client: Client):
+    def __init__(self, client: Client, anti_risk: Optional[AntiRiskManager] = None):
         self.cl = client
+        self.anti_risk = anti_risk or AntiRiskManager()
+        try:
+            self.cl.delay_range = [3, 6]
+        except Exception:
+            pass
 
-    def _apply_jitter(self, min_sec: float = 3.0, max_sec: float = 6.0):
-        """執行隨機抖動延遲，降低頻繁呼叫產生的風控風險"""
-        delay = random.uniform(max(0.1, min_sec), max(min_sec, max_sec))
+    def _apply_jitter(self, min_sec: float = 6.0, max_sec: float = 15.0):
+        """執行擬真隨機抖動延遲，降低頻繁呼叫產生的風控風險"""
+        delay = random.uniform(max(0.5, min_sec), max(min_sec, max_sec))
         logger.debug(f"Applying jitter delay: {delay:.2f} seconds...")
+        time.sleep(delay)
+
+    def _apply_read_pacing(self, min_sec: float = 1.5, max_sec: float = 3.5):
+        """唯讀操作微延遲，避免短時間並發突增呼叫"""
+        delay = random.uniform(min_sec, max_sec)
         time.sleep(delay)
 
     def _parse_media_item(self, m: Any) -> Optional[Dict[str, Any]]:
@@ -116,6 +241,7 @@ class InstagramCore:
             return {"ok": False, "error": "標籤名稱不可為空", "posts": []}
 
         logger.info(f"Searching hashtag #{tag} with limit {limit}...")
+        self._apply_read_pacing(1.5, 3.0)
         medias = []
         api_error = None
         try:
@@ -153,6 +279,7 @@ class InstagramCore:
     def get_user_medias(self, username: str, limit: int = 10) -> Dict[str, Any]:
         """指定帳號讀取最新貼文與影片 (純瀏覽、安全只讀不發文)"""
         clean_user = username.lstrip("@").strip()
+        self._apply_read_pacing(1.5, 3.0)
         logger.info(f"Fetching user medias for @{clean_user} (limit={limit})...")
         try:
             try:
@@ -234,6 +361,7 @@ class InstagramCore:
     def get_user_clips(self, username: str, limit: int = 10) -> Dict[str, Any]:
         """指定帳號專門讀取連續短片 (Reels / Clips)"""
         clean_user = username.lstrip("@").strip()
+        self._apply_read_pacing(1.5, 3.0)
         logger.info(f"Fetching Reels for @{clean_user} (limit={limit})...")
         try:
             user_id = self.cl.user_id_from_username(clean_user)
@@ -256,6 +384,7 @@ class InstagramCore:
 
     def get_reels_feed(self, limit: int = 10) -> Dict[str, Any]:
         """瀏覽熱門與探索 Reels / 短影音 (唯讀瀏覽)"""
+        self._apply_read_pacing(1.5, 3.0)
         logger.info(f"Fetching Explore Reels feed (limit={limit})...")
         try:
             # instagrapi 沒有 explore_posts；探索短片要用 explore_reels
@@ -282,6 +411,7 @@ class InstagramCore:
         q = query.lstrip("@").strip()
         if not q:
             return []
+        self._apply_read_pacing(1.0, 2.0)
         logger.info(f"Searching users: {q}...")
         try:
             users = self.cl.search_users(q)
@@ -305,6 +435,7 @@ class InstagramCore:
         q = query.lstrip("#").strip()
         if not q:
             return []
+        self._apply_read_pacing(1.0, 2.0)
         logger.info(f"Searching tags: #{q}...")
         try:
             tags = self.cl.search_hashtags(q)
@@ -321,6 +452,7 @@ class InstagramCore:
 
     def get_post_context(self, media_pk: str, comment_limit: int = 10) -> Dict[str, Any]:
         """抓取特定貼文的完整上下文（內文、發布者、鄰近留言列表）"""
+        self._apply_read_pacing(1.0, 2.5)
         logger.info(f"Fetching context for media PK: {media_pk}...")
         try:
             media = self.cl.media_info(media_pk)
@@ -368,10 +500,19 @@ class InstagramCore:
         media_pk: str,
         text: str,
         reply_to_comment_pk: Optional[str] = None,
-        jitter_min: float = 3.0,
-        jitter_max: float = 6.0,
+        jitter_min: float = 6.0,
+        jitter_max: float = 15.0,
     ) -> Dict[str, Any]:
-        """在貼文下發布留言或作為巢狀子留言回覆"""
+        """在貼文下發布留言或作為巢狀子留言回覆（包含防風控頻次檢查與熔斷）"""
+        perm = self.anti_risk.check_write_permission("comment")
+        if not perm.get("allowed"):
+            return {
+                "ok": False,
+                "in_cooldown": perm.get("in_cooldown", False),
+                "cooldown_remaining_sec": perm.get("remaining_seconds", 0),
+                "error": perm.get("reason", "防風控阻絕"),
+            }
+
         self._apply_jitter(jitter_min, jitter_max)
 
         replied_id = int(reply_to_comment_pk) if reply_to_comment_pk and str(reply_to_comment_pk).isdigit() else None
@@ -383,6 +524,7 @@ class InstagramCore:
                 text=text,
                 replied_to_comment_id=replied_id,
             )
+            self.anti_risk.record_action("comment", f"media_pk={media_pk}")
             return {
                 "ok": True,
                 "comment_pk": str(cmt.pk),
@@ -391,12 +533,33 @@ class InstagramCore:
                 "reply_to": str(reply_to_comment_pk or ""),
                 "status": "posted",
             }
+        except FeedbackRequired as e:
+            self.anti_risk.trigger_cooldown(30, f"FeedbackRequired (Instagram Action Blocked / 功能受限): {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 1800, "error": f"Instagram 功能受限 (Action Blocked)：{e}"}
+        except PleaseWaitFewMinutes as e:
+            self.anti_risk.trigger_cooldown(15, f"PleaseWaitFewMinutes (頻率過快): {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 900, "error": f"Instagram 頻率管制：{e}"}
+        except RateLimitError as e:
+            self.anti_risk.trigger_cooldown(20, f"RateLimitError: {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 1200, "error": f"Instagram 速率受限：{e}"}
+        except SentryBlock as e:
+            self.anti_risk.trigger_cooldown(60, f"SentryBlock: {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 3600, "error": f"Instagram Sentry 防護阻擋：{e}"}
+        except ChallengeRequired as e:
+            return {"ok": False, "challenge_required": True, "error": f"Instagram 安全挑戰 (Challenge Required)：{e}"}
+        except LoginRequired as e:
+            return {"ok": False, "login_required": True, "error": f"Instagram 登入憑證失效 (Login Required)：{e}"}
         except Exception as e:
+            err_msg = str(e).lower()
+            if "feedback_required" in err_msg or "action block" in err_msg or "checkpoint" in err_msg:
+                self.anti_risk.trigger_cooldown(30, f"疑似風控阻擋：{e}")
+                return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 1800, "error": f"Instagram 疑似風控阻擋：{e}"}
             logger.error(f"Failed to post comment to media {media_pk}: {e}")
             return {"ok": False, "error": str(e)}
 
     def get_unread_dms(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """讀取未讀或最近的私訊線程"""
+        """讀取未讀或最近的私訊線程（唯讀，自帶讀取微延遲）"""
+        self._apply_read_pacing(1.0, 2.5)
         logger.info(f"Fetching direct threads (limit={limit})...")
         try:
             threads = self.cl.direct_threads(amount=limit, selected_filter="unread")
@@ -455,28 +618,59 @@ class InstagramCore:
         self,
         thread_id: str,
         text: str,
-        jitter_min: float = 3.0,
-        jitter_max: float = 6.0,
+        jitter_min: float = 6.0,
+        jitter_max: float = 15.0,
     ) -> Dict[str, Any]:
-        """發送私訊到指定對話線程"""
+        """發送私訊到指定對話線程（包含防風控頻次檢查與熔斷）"""
+        perm = self.anti_risk.check_write_permission("dm")
+        if not perm.get("allowed"):
+            return {
+                "ok": False,
+                "in_cooldown": perm.get("in_cooldown", False),
+                "cooldown_remaining_sec": perm.get("remaining_seconds", 0),
+                "error": perm.get("reason", "防風控阻絕"),
+            }
+
         self._apply_jitter(jitter_min, jitter_max)
 
         logger.info(f"Sending DM to thread {thread_id}: {text[:40]}...")
         try:
             result = self.cl.direct_send(text=text, thread_ids=[thread_id])
             msg_id = getattr(result, "id", "") if hasattr(result, "id") else ""
+            self.anti_risk.record_action("dm", f"thread_id={thread_id}")
             return {
                 "ok": True,
                 "thread_id": thread_id,
                 "message_id": str(msg_id),
                 "status": "sent",
             }
+        except FeedbackRequired as e:
+            self.anti_risk.trigger_cooldown(30, f"FeedbackRequired (Instagram Action Blocked / 功能受限): {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 1800, "error": f"Instagram 功能受限 (Action Blocked)：{e}"}
+        except PleaseWaitFewMinutes as e:
+            self.anti_risk.trigger_cooldown(15, f"PleaseWaitFewMinutes (頻率過快): {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 900, "error": f"Instagram 頻率管制：{e}"}
+        except RateLimitError as e:
+            self.anti_risk.trigger_cooldown(20, f"RateLimitError: {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 1200, "error": f"Instagram 速率受限：{e}"}
+        except SentryBlock as e:
+            self.anti_risk.trigger_cooldown(60, f"SentryBlock: {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 3600, "error": f"Instagram Sentry 防護阻擋：{e}"}
+        except ChallengeRequired as e:
+            return {"ok": False, "challenge_required": True, "error": f"Instagram 安全挑戰 (Challenge Required)：{e}"}
+        except LoginRequired as e:
+            return {"ok": False, "login_required": True, "error": f"Instagram 登入憑證失效 (Login Required)：{e}"}
         except Exception as e:
+            err_msg = str(e).lower()
+            if "feedback_required" in err_msg or "action block" in err_msg or "checkpoint" in err_msg:
+                self.anti_risk.trigger_cooldown(30, f"疑似風控阻擋：{e}")
+                return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 1800, "error": f"Instagram 疑似風控阻擋：{e}"}
             logger.error(f"Failed to send DM to thread {thread_id}: {e}")
             return {"ok": False, "error": str(e)}
 
     def get_timeline_feed(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """讀取時間軸動態牆 (Timeline Feed) 或探索貼文，支援動態滾動探索"""
+        """讀取時間軸動態牆 (Timeline Feed) 或探索貼文，支援動態滾動探索（自帶微延遲）"""
+        self._apply_read_pacing(1.5, 3.5)
         logger.info(f"Fetching timeline/explore feed (limit={limit})...")
         medias = []
         try:
@@ -511,11 +705,37 @@ class InstagramCore:
             return []
 
     def like_media(self, media_pk: str) -> Dict[str, Any]:
-        """對指定貼文點讚"""
-        self._apply_jitter(1.5, 3.0)
+        """對指定貼文點讚（包含防風控頻次檢查與熔斷）"""
+        perm = self.anti_risk.check_write_permission("like")
+        if not perm.get("allowed"):
+            return {
+                "ok": False,
+                "in_cooldown": perm.get("in_cooldown", False),
+                "cooldown_remaining_sec": perm.get("remaining_seconds", 0),
+                "error": perm.get("reason", "防風控阻絕"),
+                "media_pk": media_pk,
+            }
+
+        self._apply_jitter(3.0, 7.0)
         try:
             ok = self.cl.media_like(media_pk)
+            self.anti_risk.record_action("like", f"media_pk={media_pk}")
             return {"ok": bool(ok), "media_pk": media_pk, "status": "liked"}
+        except FeedbackRequired as e:
+            self.anti_risk.trigger_cooldown(30, f"FeedbackRequired (點讚觸發 Action Blocked): {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 1800, "error": f"Instagram 功能受限 (Action Blocked)：{e}", "media_pk": media_pk}
+        except PleaseWaitFewMinutes as e:
+            self.anti_risk.trigger_cooldown(15, f"PleaseWaitFewMinutes (點讚頻率過快): {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 900, "error": f"Instagram 頻率管制：{e}", "media_pk": media_pk}
         except Exception as e:
             logger.error(f"Failed to like media {media_pk}: {e}")
             return {"ok": False, "error": str(e), "media_pk": media_pk}
+
+    def get_anti_risk_status(self) -> Dict[str, Any]:
+        """獲取目前防風控狀態、熔斷冷卻倒數與最近動作統計"""
+        return self.anti_risk.get_status()
+
+    def reset_anti_risk_cooldown(self) -> Dict[str, Any]:
+        """手動解除防風控熔斷冷卻狀態"""
+        self.anti_risk.reset_cooldown()
+        return {"ok": True, "message": "已成功解除防風控冷卻狀態"}

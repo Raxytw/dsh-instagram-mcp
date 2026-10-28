@@ -11,6 +11,17 @@
 > Official foundational Instagram FastMCP service plugin for **DeepSeek Harness (DSH)**.  
 > Manages the Python FastMCP child process lifecycle, maintains persistent Instagram session credentials and 2FA challenges, and provides standard Model Context Protocol (MCP) tools for DSH AI models and consumer plugins.
 
+> [!CAUTION]
+> ### ⚠️ CRITICAL WARNING & DISCLAIMER
+> 1. **Violation of Instagram Terms of Service & Community Guidelines**:
+>    This plugin and the underlying FastMCP server interact with Instagram via unofficial reverse-engineered APIs (via `instagrapi`), which **expressly violates Instagram / Meta's Terms of Use and Community Guidelines**.
+> 2. **DO NOT USE YOUR PERSONAL / PRIMARY ACCOUNT**:
+>    **Never use your personal, primary, or business-critical Instagram account!** Instagram actively detects automated bot interactions using advanced risk algorithms. Running automated tasks carries a severe risk of **Action Blocks, Challenge Checkpoints, temporary lockouts, and PERMANENT ACCOUNT SUSPENSION / BANNING**.
+> 3. **Use Dedicated Burner / Alt Accounts & Clean Proxies**:
+>    Only run this service using disposable test accounts (burner/alt accounts) paired with dedicated, clean residential proxies. Avoid frequent IP or location hopping.
+> 4. **Disclaimer**:
+>    This software is provided solely for educational and research purposes. The developers and contributors accept **no responsibility or liability** for any account bans, suspensions, restrictions, or damages arising from the use of this project. Use entirely at your own risk.
+
 ---
 
 ## 🌟 Key Features
@@ -25,10 +36,15 @@
    - Supports username/password authentication, persistent session cache reuse (`data/ig_session.json`), and interactive two-factor authentication (2FA) challenges.
 4. **Zero-Error Shared Singleton Service**:
    - Exports `getSharedMcpService()` and `getSharedMcpClient()`, enabling consumer plugins (`dsh-instagram-plugin`, `dsh-instagram-scroll`) to safely access underlying connections and login state without Cordis property access errors.
-5. **9 Standard Model Context Protocol (MCP) Tools**:
-   - Registers 9 core Instagram primitives with DSH `ctx.tools` for direct AI function calling.
-6. **Dedicated Web REST API**:
-   - Exposes `/api/instagram/mcp/*` endpoints to read/update configuration, query live daemon and login health, reboot the subprocess, and perform credential checks.
+5. **Built-in Multi-Layered Anti-Risk Protection**:
+   - **Humanized Random Jitter**: Write operations enforce randomized delays (default 6–15 seconds); read queries and timeline browsing incorporate micro-pacing delays (1.5–3.5s).
+   - **Circuit Breaker Cooldown**: Detects Instagram rate limit or block signals (`FeedbackRequired` Action Blocked, `PleaseWaitFewMinutes`, `RateLimitError`) and automatically initiates a 15–60 minute cooldown safeguard to prevent permanent account suspension.
+   - **Hourly Write Cap**: Automatically throttles write operations if exceeding the hourly safety threshold (default 15 actions/hour).
+   - **Device & Locale Fingerprint Stability**: Maintains consistent device headers and locale settings to prevent geo-hopping detection.
+6. **Standard Model Context Protocol (MCP) Tools**:
+   - Registers core Instagram tools with DSH `ctx.tools` (including login, search, comments, DMs, feed, and anti-risk management) for direct AI function calling.
+7. **Dedicated Web REST API**:
+   - Exposes `/api/instagram/mcp/*` endpoints to read/update configuration, query live daemon and login health, reboot the subprocess, reset cooldowns, and perform credential checks.
 
 ---
 
@@ -48,19 +64,21 @@ npm install @luoyi-dsh/instagram-mcp
 
 ---
 
-## 🛠️ Provided MCP Tools (9 Core Primitives)
+## 🛠️ Provided MCP Tools
 
 | Tool Name | Description | Parameters |
 | :--- | :--- | :--- |
-| **`ig_check_status`** | Check FastMCP service status and current Instagram login details | None |
+| **`ig_check_status`** | Check FastMCP service status, Instagram login state, and anti-risk cooldown status | None |
 | **`ig_login`** | Authenticate Instagram account or validate existing session cache | `username`, `password`, `two_factor_code`, `proxy_url` |
 | **`ig_search_hashtag`** | Search top and recent posts for a specified hashtag | `hashtag` (string), `limit` (number) |
 | **`ig_get_post_context`** | Fetch complete post caption, author metadata, and adjacent comments | `media_pk` (string), `comment_limit` (number) |
-| **`ig_post_comment`** | Publish a comment or reply to an existing comment on a post | `media_pk` (string), `text` (string), `reply_to_comment_pk` (optional) |
-| **`ig_get_unread_dms`** | Read unread or latest Instagram direct message threads | `limit` (number) |
-| **`ig_send_dm`** | Send a direct message to a specific thread | `thread_id` (string), `text` (string) |
-| **`ig_get_timeline_feed`** | Retrieve posts from user's timeline feed | `limit` (number) |
-| **`ig_like_media`** | Like a specific Instagram post | `media_pk` (string) |
+| **`ig_post_comment`** | Publish a comment or reply to an existing comment on a post (Anti-risk protected) | `media_pk`, `text`, `reply_to_comment_pk`, `jitter_min`, `jitter_max` |
+| **`ig_get_unread_dms`** | Read unread or latest Instagram direct message threads (with pacing delay) | `limit` (number) |
+| **`ig_send_dm`** | Send a direct message to a specific thread (Anti-risk protected) | `thread_id`, `text`, `jitter_min`, `jitter_max` |
+| **`ig_get_timeline_feed`** | Retrieve posts from user's timeline feed (with pacing delay) | `limit` (number) |
+| **`ig_like_media`** | Like a specific Instagram post (Anti-risk protected) | `media_pk` (string) |
+| **`ig_get_anti_risk_status`** | Query anti-risk circuit breaker status, remaining cooldown, and hourly write counts | None |
+| **`ig_reset_anti_risk_cooldown`** | Manually reset anti-risk cooldown protection status | None |
 
 ---
 

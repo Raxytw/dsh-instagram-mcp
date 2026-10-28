@@ -249,7 +249,7 @@ export class InstagramMcpClient {
     reply_to_comment_pk?: string
     jitter_min?: number
     jitter_max?: number
-  }): Promise<{ ok: boolean; comment_pk?: string; error?: string }> {
+  }): Promise<{ ok: boolean; comment_pk?: string; error?: string; in_cooldown?: boolean; cooldown_remaining_sec?: number }> {
     return this.callTool('ig_post_comment', params, 45000)
   }
 
@@ -262,7 +262,7 @@ export class InstagramMcpClient {
     text: string
     jitter_min?: number
     jitter_max?: number
-  }): Promise<{ ok: boolean; message_id?: string; error?: string }> {
+  }): Promise<{ ok: boolean; message_id?: string; error?: string; in_cooldown?: boolean; cooldown_remaining_sec?: number }> {
     return this.callTool('ig_send_dm', params, 45000)
   }
 
@@ -290,7 +290,16 @@ export class InstagramMcpClient {
     return this.callTool('ig_get_timeline_feed', { limit }, 45000)
   }
 
-  public async igLikeMedia(media_pk: string): Promise<{ ok: boolean; media_pk: string; status?: string; error?: string }> {
+  public async igLikeMedia(media_pk: string): Promise<{ ok: boolean; media_pk: string; status?: string; error?: string; in_cooldown?: boolean; cooldown_remaining_sec?: number }> {
     return this.callTool('ig_like_media', { media_pk }, 30000)
   }
+
+  public async igGetAntiRiskStatus(): Promise<{ ok: boolean; anti_risk: import('../types.js').InstagramAntiRiskStatus }> {
+    return this.callTool('ig_get_anti_risk_status', {}, 20000)
+  }
+
+  public async igResetAntiRiskCooldown(): Promise<{ ok: boolean; message: string }> {
+    return this.callTool('ig_reset_anti_risk_cooldown', {}, 20000)
+  }
 }
+

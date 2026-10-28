@@ -43,15 +43,23 @@ export function registerMcpTools(
   // 1. 檢查狀態
   register({
     name: 'ig_check_status',
-    description: '檢查 Instagram FastMCP 伺服器連線狀態與目前 Session 登入情形。',
+    description: '檢查 Instagram FastMCP 伺服器連線狀態、Session 登入情形與防風控熔斷冷卻狀態。',
     parameters: { type: 'object', properties: {} },
     execute: async () => {
       const client = getMcpClient()
       const status = getLoginStatus()
+      let antiRisk: any = null
+      if (client?.ready) {
+        try {
+          const ar = await client.igGetAntiRiskStatus()
+          if (ar?.ok) antiRisk = ar.anti_risk
+        } catch {}
+      }
       return {
         mcpRunning: Boolean(client?.isRunning),
         mcpReady: Boolean(client?.ready),
         loginStatus: status,
+        antiRisk,
       }
     },
   })
@@ -321,5 +329,29 @@ export function registerMcpTools(
     },
   })
 
-  log('✅ 已註冊 14 個 Instagram MCP 核心工具至 DSH Tools！')
+  // 15. 查詢防風控狀態
+  register({
+    name: 'ig_get_anti_risk_status',
+    description: '查詢 Instagram 防風控安全狀態（熔斷冷卻倒數、最近一小時寫入次數、安全建議等）。',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const client = getMcpClient()
+      if (!client || !client.ready) return { ok: false, error: 'FastMCP 尚未就緒' }
+      return await client.igGetAntiRiskStatus()
+    },
+  })
+
+  // 16. 手動解除防風控熔斷
+  register({
+    name: 'ig_reset_anti_risk_cooldown',
+    description: '手動解除防風控熔斷冷卻狀態（僅在確認 Instagram 官方功能限制已解除後調用）。',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      const client = getMcpClient()
+      if (!client || !client.ready) return { ok: false, error: 'FastMCP 尚未就緒' }
+      return await client.igResetAntiRiskCooldown()
+    },
+  })
+
+  log('✅ 已註冊 16 個 Instagram MCP 核心工具（含防風控熔斷管理）至 DSH Tools！')
 }

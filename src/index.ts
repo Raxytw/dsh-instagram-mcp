@@ -109,6 +109,7 @@ export function apply(ctx: any, userConfig: Partial<InstagramMcpConfig> = {}) {
   try {
     if (typeof ctx?.provide === 'function') {
       ctx.provide('instagramMcp')
+      ctx.instagramMcp = service
     }
   } catch {}
 
@@ -245,6 +246,13 @@ export function apply(ctx: any, userConfig: Partial<InstagramMcpConfig> = {}) {
       // 讀取 FastMCP 服務運行狀態
       if (req.method === 'GET' && pathname === '/api/instagram/mcp/status') {
         const sessFile = join(pluginRoot, activeConfig.sessionPath || 'data/ig_session.json')
+        let antiRisk: any = null
+        if (mcpClient?.ready) {
+          try {
+            const ar = await mcpClient.igGetAntiRiskStatus()
+            if (ar?.ok) antiRisk = ar.anti_risk
+          } catch {}
+        }
         return sendJson(res, 200, {
           ok: true,
           mcpRunning: Boolean(mcpClient?.isRunning),
@@ -253,7 +261,17 @@ export function apply(ctx: any, userConfig: Partial<InstagramMcpConfig> = {}) {
           sessionExists: existsSync(sessFile),
           sessionPath: activeConfig.sessionPath,
           pythonPath: activeConfig.pythonPath,
+          antiRisk,
         })
+      }
+
+      // 手動重設防風控熔斷
+      if (req.method === 'POST' && pathname === '/api/instagram/mcp/reset-cooldown') {
+        if (!mcpClient || !mcpClient.ready) {
+          return sendJson(res, 503, { ok: false, error: 'FastMCP 尚未就緒' })
+        }
+        const resetRes = await mcpClient.igResetAntiRiskCooldown()
+        return sendJson(res, 200, resetRes)
       }
 
       // 重啟 FastMCP 子進程

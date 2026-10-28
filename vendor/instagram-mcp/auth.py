@@ -22,6 +22,13 @@ class InstagramAuth:
 
     def __init__(self, client: Optional[Client] = None):
         self.cl = client or Client()
+        # 防風控設定：配置請求內建隨機等待區間與裝置語系，降低被 Instagram 風控標記為異常腳本的機率
+        try:
+            self.cl.delay_range = [3, 6]
+            self.cl.set_country("TW")
+            self.cl.set_locale("zh_TW")
+        except Exception:
+            pass
 
     def set_proxy(self, proxy_url: Optional[str] = None):
         """配置代理伺服器 (http/https/socks5)"""

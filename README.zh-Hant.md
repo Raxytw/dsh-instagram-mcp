@@ -11,6 +11,17 @@
 > **DeepSeek Harness (DSH)** 官方底層 Instagram 核心服務外掛。  
 > 負責自動管理獨立的 Python FastMCP 子進程、維持登入 Session 憑證，並向 DSH Tools 與其他外掛提供標準 Model Context Protocol (MCP) 操作介面。
 
+> [!CAUTION]
+> ### ⚠️ 重要風險警告與免責聲明 (CRITICAL DISCLAIMER)
+> 1. **違反 Instagram 社群守則與服務條款**：
+>    本插件與底層 FastMCP 服務使用非官方逆向 API（基於 `instagrapi`），**明確違反了 Instagram / Meta 的《服務條款 (Terms of Use)》及《社群守則 (Community Guidelines)》**。
+> 2. **切勿使用本人主要帳號運行 (DO NOT USE YOUR PRIMARY ACCOUNT)**：
+>    **嚴禁使用您個人的日常主要帳號、官方認證帳號或高價值商業帳號！** Instagram 官方具備嚴格的 AI 反爬與行為風控檢測，任何自動化讀寫操作均有極高機率觸發官方審查，導致：**功能限制 (Action Blocked)、強制手機簡訊/自拍驗證 (Challenge Checkpoint)、帳號臨時鎖定、甚至永久停權停號 (Permanent Ban)**！
+> 3. **測試與備用小號原則**：
+>    若需測試本外掛，請務必使用**無重要資料的測試用小號 (Burner / Alt Account)**，並強烈建議配置**優質純淨的住宅代理伺服器 (Residential Proxy)**，切勿在短時間內切換不同國家/地區的 IP。
+> 4. **免責宣告**：
+>    本專案純屬程式技術研究與開源通訊協定評估用途。使用者因安裝、運行或配置本外掛所導致之任何帳號停權、封禁、資料損失或相關責任，**開發者一概不負任何法律與連帶賠償責任**，使用時請務必審慎評估並自負風險！
+
 ---
 
 ## 🌟 核心特性
@@ -25,9 +36,14 @@
    - 支援帳號密碼登入、Session 快取載入 (`data/ig_session.json`) 與 2FA 驗證碼挑戰。
 4. **全域單例共享服務 (Zero-Error Singleton)**：
    - 導出 `getSharedMcpService()` 與 `getSharedMcpClient()`，供業務層插件 (`dsh-instagram-plugin`、`dsh-instagram-scroll`) 安全共享底層連線與登入狀態，完全免除 Cordis 的屬性存取拋錯。
-5. **標準 MCP Tools 註冊**：
-   - 向 DSH `ctx.tools` 註冊 9 項 Instagram 核心底層工具，供 AI 主模型直接調用。
-6. **專屬 Web REST API**：
+5. **內建多重防風控安全機制 (Anti-Risk Control)**：
+   - **擬真隨機抖動延遲 (Jitter)**：所有寫入行為預設執行 6~15 秒人造隨機等待；讀取與動態滾動注入 1.5~3.5 秒微延遲 (Pacing)。
+   - **異常熔斷保護 (Circuit Breaker)**：當偵測到 Instagram 官方風控訊號（如 `FeedbackRequired` Action Blocked、`PleaseWaitFewMinutes`、`RateLimitError`）時，自動觸發 15~60 分鐘冷卻保護模式，即刻中斷後續所有寫入動作，保全帳號免遭永久封禁。
+   - **小時頻次保護**：嚴格限制最近一小時內累計寫入操作上限（預設 15 次）。
+   - **指紋與語系穩定**：固定設備語系 (`zh_TW`) 與請求間隔，減少環境跳躍風險。
+6. **標準 MCP Tools 註冊**：
+   - 向 DSH `ctx.tools` 註冊完整 Instagram 核心底層工具（含狀態、登入、搜尋、留言、私訊、動態牆、防風控熔斷管理），供 AI 主模型直接調用。
+7. **專屬 Web REST API**：
    - 提供 `/api/instagram/mcp/*` 路由供前端控制面板讀寫配置、查詢運行狀態、重啟子進程及進行登入挑戰。
 
 ---
@@ -48,19 +64,21 @@ npm install @luoyi-dsh/instagram-mcp
 
 ---
 
-## 🛠️ 提供之 9 項標準 MCP 工具
+## 🛠️ 提供之標準 MCP 工具清單
 
 | 工具名稱 | 說明 | 參數 |
 | :--- | :--- | :--- |
-| **`ig_check_status`** | 檢查 FastMCP 服務狀態與當前 Instagram 登入情形 | 無 |
+| **`ig_check_status`** | 檢查 FastMCP 服務狀態、Session 登入情形與防風控熔斷冷卻倒數 | 無 |
 | **`ig_login`** | 登入 Instagram 帳號或重新驗證 Session 快取 | `username`, `password`, `two_factor_code`, `proxy_url` |
 | **`ig_search_hashtag`** | 搜尋指定 Hashtag 標籤之精選/最新貼文清單 | `hashtag` (string), `limit` (number) |
 | **`ig_get_post_context`** | 抓取指定貼文之完整內文、發布者資訊與相鄰留言上下文 | `media_pk` (string), `comment_limit` (number) |
-| **`ig_post_comment`** | 於指定貼文發表新留言，或對特定留言進行巢狀回覆 | `media_pk` (string), `text` (string), `reply_to_comment_pk` (可選) |
-| **`ig_get_unread_dms`** | 讀取最新或未讀之 Instagram 私訊對話線程 | `limit` (number) |
-| **`ig_send_dm`** | 發送 Instagram Direct Message 私訊給特定線程 | `thread_id` (string), `text` (string) |
+| **`ig_post_comment`** | 於指定貼文發表新留言，或對特定留言進行巢狀回覆 (受防風控保護) | `media_pk`, `text`, `reply_to_comment_pk`, `jitter_min`, `jitter_max` |
+| **`ig_get_unread_dms`** | 讀取最新或未讀之 Instagram 私訊對話線程 (自帶微延遲) | `limit` (number) |
+| **`ig_send_dm`** | 發送 Instagram Direct Message 私訊給特定線程 (受防風控保護) | `thread_id`, `text`, `jitter_min`, `jitter_max` |
 | **`ig_get_timeline_feed`** | 抓取使用者首頁動態牆 (Timeline Feed) 貼文清單 | `limit` (number) |
-| **`ig_like_media`** | 對指定的 Instagram 貼文按讚 | `media_pk` (string) |
+| **`ig_like_media`** | 對指定的 Instagram 貼文按讚 (受防風控保護) | `media_pk` (string) |
+| **`ig_get_anti_risk_status`** | 查詢 Instagram 防風控熔斷狀態、冷卻剩餘秒數與小時寫入計數 | 無 |
+| **`ig_reset_anti_risk_cooldown`** | 手動解除防風控冷卻保護狀態 | 無 |
 
 ---
 

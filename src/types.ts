@@ -124,3 +124,13 @@ export interface InstagramSearchTagsResult {
     media_count: number
   }>
 }
+
+export interface InstagramAntiRiskStatus {
+  in_cooldown: boolean
+  cooldown_remaining_sec: number
+  cooldown_reason: string
+  hourly_write_count: number
+  hourly_write_cap: number
+  last_write_timestamp: number
+}
+

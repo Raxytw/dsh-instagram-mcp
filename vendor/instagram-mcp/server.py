@@ -244,7 +244,22 @@ def ig_like_media(media_pk: str) -> str:
     return json.dumps(res, ensure_ascii=False)
 
 
+@mcp.tool()
+def ig_get_anti_risk_status() -> str:
+    """獲取 Instagram 防風控安全狀態（熔斷冷卻倒數、最近一小時寫入次數等）。"""
+    status = core_handler.get_anti_risk_status()
+    return json.dumps({"ok": True, "anti_risk": status}, ensure_ascii=False)
+
+
+@mcp.tool()
+def ig_reset_anti_risk_cooldown() -> str:
+    """手動解除防風控熔斷冷卻保護狀態（僅在確認帳號已恢復正常時使用）。"""
+    res = core_handler.reset_anti_risk_cooldown()
+    return json.dumps(res, ensure_ascii=False)
+
+
 if __name__ == "__main__":
     logger.info("Starting Instagram FastMCP Server on stdio...")
     mcp.run(transport="stdio")
+
 
