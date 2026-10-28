@@ -236,11 +236,19 @@ export class InstagramMcpClient {
   }
 
   public async igSearchHashtag(hashtag: string, limit = 10): Promise<{ ok: boolean; hashtag: string; posts: InstagramPost[] }> {
-    return this.callTool('ig_search_hashtag', { hashtag, limit }, 45000)
+    return this.callTool('ig_search_hashtag', { hashtag, limit }, 60000)
   }
 
-  public async igGetPostContext(media_pk: string, comment_limit = 10): Promise<InstagramPostContext> {
+  public async igFuzzySearchPosts(query: string, limit = 10): Promise<import('../types.js').InstagramFuzzySearchResult> {
+    return this.callTool('ig_fuzzy_search_posts', { query, limit }, 75000)
+  }
+
+  public async igGetPostContext(media_pk: string, comment_limit = 15): Promise<InstagramPostContext> {
     return this.callTool('ig_get_post_context', { media_pk, comment_limit }, 45000)
+  }
+
+  public async igGetRecentMentions(limit = 20): Promise<import('../types.js').InstagramRecentMentionsResult> {
+    return this.callTool('ig_get_recent_mentions', { limit }, 45000)
   }
 
   public async igPostComment(params: {
@@ -275,7 +283,7 @@ export class InstagramMcpClient {
   }
 
   public async igGetReelsFeed(limit = 10): Promise<{ ok: boolean; count: number; reels: InstagramPost[] }> {
-    return this.callTool('ig_get_reels_feed', { limit }, 45000)
+    return this.callTool('ig_get_reels_feed', { limit }, 60000)
   }
 
   public async igSearchUsers(query: string, limit = 10): Promise<import('../types.js').InstagramSearchUsersResult> {
@@ -287,7 +295,7 @@ export class InstagramMcpClient {
   }
 
   public async igGetTimelineFeed(limit = 10): Promise<{ ok: boolean; posts: InstagramPost[] }> {
-    return this.callTool('ig_get_timeline_feed', { limit }, 45000)
+    return this.callTool('ig_get_timeline_feed', { limit }, 75000)
   }
 
   public async igLikeMedia(media_pk: string): Promise<{ ok: boolean; media_pk: string; status?: string; error?: string; in_cooldown?: boolean; cooldown_remaining_sec?: number }> {

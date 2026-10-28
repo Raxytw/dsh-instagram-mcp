@@ -400,15 +400,61 @@ window.__ModuleLoader__.load({
       const [saveNotice, setSaveNotice] = useState(null)
       const [showPassword, setShowPassword] = useState(false)
 
+      const readCachedAccounts = () => {
+        try {
+          return JSON.parse(localStorage.getItem('dsh_ig_mcp_accounts') || '{}') || {}
+        } catch {
+          return {}
+        }
+      }
+
+      const writeCachedAccounts = (username, masterUsername) => {
+        try {
+          localStorage.setItem(
+            'dsh_ig_mcp_accounts',
+            JSON.stringify({
+              username: String(username || '').replace(/^@/, '').trim(),
+              masterUsername: String(masterUsername || '').replace(/^@/, '').trim(),
+            })
+          )
+        } catch {}
+      }
+
       const loadData = async () => {
         setLoading(true)
         try {
-          const [cfgRes, statusRes] = await Promise.all([
+          const cached = readCachedAccounts()
+          const [cfgRes, statusRes, scrollCfgRes, pluginCfgRes] = await Promise.all([
             jget('/config'),
             jget('/status').catch(() => ({ ok: false })),
+            fetch('/api/instagram/scroll/config', { credentials: 'same-origin' })
+              .then((r) => (r.ok ? r.json() : null))
+              .catch(() => null),
+            fetch('/api/instagram/config', { credentials: 'same-origin' })
+              .then((r) => (r.ok ? r.json() : null))
+              .catch(() => null),
           ])
           if (cfgRes?.ok) {
-            setConfig(cfgRes.config)
+            const loaded = cfgRes.config || {}
+            const resolvedUsername = String(
+              loaded.username ||
+              cached.username ||
+              pluginCfgRes?.config?.botUsername ||
+              ''
+            ).replace(/^@/, '').trim()
+            const resolvedMaster = String(
+              loaded.masterUsername ||
+              cached.masterUsername ||
+              scrollCfgRes?.config?.masterUsername ||
+              pluginCfgRes?.config?.targetMentionUser ||
+              ''
+            ).replace(/^@/, '').trim()
+            writeCachedAccounts(resolvedUsername, resolvedMaster)
+            setConfig({
+              ...loaded,
+              username: resolvedUsername,
+              masterUsername: resolvedMaster,
+            })
             setIsDirty(false)
           }
           if (statusRes?.ok) {
@@ -438,11 +484,52 @@ window.__ModuleLoader__.load({
         setSaving(true)
         setSaveNotice(null)
         try {
-          const res = await jpost('/config', config)
+          const cleanUsername = String(config.username || '').replace(/^@/, '').trim()
+          const cleanMaster = String(config.masterUsername || '').replace(/^@/, '').trim()
+          const payload = {
+            ...config,
+            username: cleanUsername,
+            masterUsername: cleanMaster,
+          }
+          writeCachedAccounts(cleanUsername, cleanMaster)
+
+          const res = await jpost('/config', payload)
+
+          // 同步寫入 scroll 與 plugin 後端配置，確保常駐同步且無須重啟宿主即可立即生效
+          await Promise.all([
+            fetch('/api/instagram/scroll/config', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ masterUsername: cleanMaster }),
+            }).catch(() => null),
+            fetch('/api/instagram/config', { credentials: 'same-origin' })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((plugRes) => {
+                if (!plugRes?.ok || !plugRes.config) return null
+                return fetch('/api/instagram/config', {
+                  method: 'POST',
+                  credentials: 'same-origin',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({
+                    ...plugRes.config,
+                    botUsername: cleanUsername,
+                    targetMentionUser: cleanMaster,
+                  }),
+                })
+              })
+              .catch(() => null),
+          ])
+
           if (res?.ok) {
-            setConfig(res.config)
+            setConfig({
+              ...payload,
+              ...(res.config || {}),
+              username: cleanUsername,
+              masterUsername: cleanMaster,
+            })
             setIsDirty(false)
-            setSaveNotice({ type: 'saved', text: 'FastMCP 配置已成功儲存！' })
+            setSaveNotice({ type: 'saved', text: 'FastMCP 配置與機器人/主人帳號已成功儲存並全域同步！' })
             setTimeout(() => setSaveNotice(null), 3000)
           }
         } catch (e) {
@@ -589,6 +676,27 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'mcp-field-row' },
+              h('div', { className: 'mcp-field-label' }, '機器人 / 主人帳號綁定'),
+              h(
+                'div',
+                { style: { fontSize: '12px', color: '#cbd5e1', display: 'flex', gap: '16px', flexWrap: 'wrap' } },
+                h(
+                  'span',
+                  null,
+                  '🤖 機器人帳號: ',
+                  h('strong', { style: { color: '#34d399' } }, config.username || status?.botUsername ? `@${(config.username || status?.botUsername).replace(/^@/, '')}` : '未設定')
+                ),
+                h(
+                  'span',
+                  null,
+                  '🎯 主人帳號: ',
+                  h('strong', { style: { color: '#60a5fa' } }, config.masterUsername || status?.masterUsername ? `@${(config.masterUsername || status?.masterUsername).replace(/^@/, '')}` : '未設定')
+                )
+              )
+            ),
+            h(
+              'div',
+              { className: 'mcp-field-row' },
               h('div', { className: 'mcp-field-label' }, 'Session 快取檔案'),
               h(
                 'div',
@@ -630,16 +738,37 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'mcp-card' },
-            h('div', { className: 'mcp-card-title' }, h(Icon.Key), 'Instagram 認證憑證'),
+            h('div', { className: 'mcp-card-title' }, h(Icon.Key), 'Instagram 認證憑證與全域帳號綁定'),
             h(
               'div',
               { className: 'mcp-field-row' },
-              h('div', null, h('div', { className: 'mcp-field-label' }, 'Instagram 帳號'), h('div', { className: 'mcp-field-desc' }, '用戶名稱（不含 @）')),
+              h(
+                'div',
+                null,
+                h('div', { className: 'mcp-field-label' }, '機器人 Instagram 帳號 (Bot Username)'),
+                h('div', { className: 'mcp-field-desc' }, '用於登入及被 @ 識別，Plugin 與 Scroll 自動沿用（不含 @）')
+              ),
               h('input', {
                 className: 'mcp-input',
                 value: config.username || '',
-                placeholder: '例如: your_username',
-                onChange: (e) => updateConfig('username', e.target.value),
+                placeholder: '例如: raxytw.ai',
+                onChange: (e) => updateConfig('username', e.target.value.replace(/^@/, '').trim()),
+              })
+            ),
+            h(
+              'div',
+              { className: 'mcp-field-row' },
+              h(
+                'div',
+                null,
+                h('div', { className: 'mcp-field-label' }, '主人 Instagram 帳號 (Master Username)'),
+                h('div', { className: 'mcp-field-desc' }, '發現好文時在留言區 @ 推坑的目標主人帳號，Plugin 與 Scroll 自動沿用（不含 @）')
+              ),
+              h('input', {
+                className: 'mcp-input',
+                value: config.masterUsername || '',
+                placeholder: '例如: raxytw.dev',
+                onChange: (e) => updateConfig('masterUsername', e.target.value.replace(/^@/, '').trim()),
               })
             ),
             h(

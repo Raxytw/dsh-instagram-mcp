@@ -119,22 +119,58 @@ export function registerMcpTools(
     },
   })
 
-  // 4. 取得貼文內文與相鄰留言上下文
+  // 3.5 模糊搜尋貼文與短片 (推薦優先使用)
   register({
-    name: 'ig_get_post_context',
-    description: '抓取指定 Instagram 貼文的完整標題、發布者資訊與相鄰留言上下文。',
+    name: 'ig_fuzzy_search_posts',
+    description: '模糊搜尋 Instagram 貼文與連續短片 (結合綜合關鍵字 SERP、Reels 搜尋與相關創作者貼文，解決單純 Hashtag 標籤搜尋返回 0 則貼文的問題)。',
     parameters: {
       type: 'object',
       properties: {
-        media_pk: { type: 'string', description: '貼文 PK 代碼' },
-        comment_limit: { type: 'number', description: '抓取留言數量上限 (預設 10)' },
+        query: { type: 'string', description: '模糊搜尋關鍵字（如 ai, deepseek, coding, tech 等）' },
+        limit: { type: 'number', description: '獲取貼文數量上限 (預設 10)' },
+      },
+      required: ['query'],
+    },
+    execute: async (args: any) => {
+      const client = getMcpClient()
+      if (!client || !client.ready) return { ok: false, error: 'FastMCP 尚未就緒' }
+      return await client.igFuzzySearchPosts(args.query, args.limit || 10)
+    },
+  })
+
+  // 4. 取得貼文或 Reel 內文與相鄰留言上下文
+  register({
+    name: 'ig_get_post_context',
+    description: '抓取指定 Instagram 貼文或 Reel 的完整內文、標題、無障礙視覺描述、音訊資訊、字幕與相鄰留言（含子留言）上下文。',
+    parameters: {
+      type: 'object',
+      properties: {
+        media_pk: { type: 'string', description: '貼文或 Reel PK 代碼' },
+        comment_limit: { type: 'number', description: '抓取留言數量上限 (預設 15)' },
       },
       required: ['media_pk'],
     },
     execute: async (args: any) => {
       const client = getMcpClient()
       if (!client || !client.ready) return { ok: false, error: 'FastMCP 尚未就緒' }
-      return await client.igGetPostContext(args.media_pk, args.comment_limit || 10)
+      return await client.igGetPostContext(args.media_pk, args.comment_limit || 15)
+    },
+  })
+
+  // 4.5 取得近期提及 (@mention) 通知清單
+  register({
+    name: 'ig_get_recent_mentions',
+    description: '從 Instagram 通知收件匣 (news/inbox) 取得近期提及 (@mention) 或回覆機器人的貼文與 Reel PK 清單。',
+    parameters: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: '最大取得提及通知數量 (預設 20)' },
+      },
+    },
+    execute: async (args: any) => {
+      const client = getMcpClient()
+      if (!client || !client.ready) return { ok: false, error: 'FastMCP 尚未就緒' }
+      return await client.igGetRecentMentions(args.limit || 20)
     },
   })
 

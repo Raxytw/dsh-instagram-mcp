@@ -90,6 +90,20 @@ def ig_search_hashtag(hashtag: str, limit: int = 10) -> str:
 
 
 @mcp.tool()
+def ig_fuzzy_search_posts(query: str, limit: int = 10) -> str:
+    """模糊搜尋 Instagram 貼文與連續短片 (Fuzzy Search Posts & Reels)。
+    結合綜合關鍵字搜尋 (top_serp)、Reels 關鍵字搜尋 (reels_serp) 與相關公開創作者貼文，
+    避免單純 Hashtag 標籤搜尋返回 0 則貼文的問題。
+
+    Args:
+        query: 模糊搜尋關鍵字（例如 ai, deepseek, coding, tech, art 等）
+        limit: 抓取貼文筆數上限 (預設 10)
+    """
+    res = core_handler.fuzzy_search_posts(query=query, limit=limit)
+    return json.dumps(res, ensure_ascii=False)
+
+
+@mcp.tool()
 def ig_get_user_medias(username: str, limit: int = 10) -> str:
     """指定帳號讀取最新發布之貼文與影片列表 (純瀏覽、安全只讀不發文)。
 
@@ -149,15 +163,26 @@ def ig_search_tags(query: str, limit: int = 10) -> str:
 
 
 @mcp.tool()
-def ig_get_post_context(media_pk: str, comment_limit: int = 10) -> str:
-    """取得指定貼文之完整內文與留言上下文脈絡。
+def ig_get_post_context(media_pk: str, comment_limit: int = 15) -> str:
+    """取得指定貼文或 Reel 之完整內文、標題、無障礙視覺描述、音訊資訊、字幕與留言（含子留言）上下文脈絡。
 
     Args:
-        media_pk: 貼文唯一識別碼 (Media PK)
+        media_pk: 貼文或 Reel 唯一識別碼 (Media PK)
         comment_limit: 抓取相鄰留言之最大筆數
     """
     ctx = core_handler.get_post_context(media_pk=media_pk, comment_limit=comment_limit)
     return json.dumps(ctx, ensure_ascii=False)
+
+
+@mcp.tool()
+def ig_get_recent_mentions(limit: int = 20) -> str:
+    """從 Instagram 通知收件匣 (news/inbox) 取得近期提及 (@mention) 或回覆機器人的貼文與 Reel PK 清單。
+
+    Args:
+        limit: 抓取提及通知筆數上限 (預設 20)
+    """
+    res = core_handler.get_recent_mentions(limit=limit)
+    return json.dumps(res, ensure_ascii=False)
 
 
 @mcp.tool()

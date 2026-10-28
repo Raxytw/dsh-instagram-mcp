@@ -145,22 +145,74 @@ class InstagramCore:
         time.sleep(delay)
 
     def _parse_media_item(self, m: Any) -> Optional[Dict[str, Any]]:
-        """統一解析 Instagram 貼文/影片/Reel 資訊，包含聯名作者與短影音屬性"""
+        """統一解析 instagrapi Media 物件或原始字典，支援單圖、輪播、影片與 Reel 短片（含視覺描述、音訊資訊與多圖 URL）"""
         if not m:
             return None
         try:
+            title = ""
+            accessibility_caption = ""
+            audio_info = ""
+            image_urls: List[str] = []
+            video_duration = 0.0
+            location_name = ""
+
             if isinstance(m, dict):
-                pk = str(m.get("pk") or m.get("id") or "")
+                pk = str(m.get("pk") or m.get("id") or "").split("_")[0]
                 id_ = str(m.get("id") or "")
                 code = str(m.get("code") or "")
                 caption = str(m.get("caption", {}).get("text", "") if isinstance(m.get("caption"), dict) else (m.get("caption_text") or ""))
+                title = str(m.get("title") or "")
+                accessibility_caption = str(m.get("accessibility_caption") or "")
                 like_count = int(m.get("like_count") or 0)
                 comment_count = int(m.get("comment_count") or 0)
-                view_count = int(m.get("view_count") or 0)
+                view_count = int(m.get("view_count") or m.get("play_count") or 0)
                 media_type = int(m.get("media_type") or 1)
                 product_type = str(m.get("product_type") or "feed")
+                video_duration = float(m.get("video_duration") or 0.0)
+
                 video_url = str(m.get("video_url") or "")
+                if not video_url and isinstance(m.get("video_versions"), list) and m["video_versions"]:
+                    video_url = str(m["video_versions"][0].get("url") or "")
+
                 thumbnail_url = str(m.get("thumbnail_url") or "")
+                if not thumbnail_url and isinstance(m.get("image_versions2"), dict):
+                    cands = m["image_versions2"].get("candidates") or []
+                    if isinstance(cands, list) and cands:
+                        thumbnail_url = str(cands[0].get("url") or "")
+                if thumbnail_url:
+                    image_urls.append(thumbnail_url)
+
+                # 若為輪播圖文 (carousel_media)，提取每張圖的 URL 與無障礙視覺描述
+                carousel_a11y = []
+                for idx, cm in enumerate(m.get("carousel_media") or []):
+                    if isinstance(cm, dict):
+                        cm_a11y = str(cm.get("accessibility_caption") or "").strip()
+                        if cm_a11y:
+                            carousel_a11y.append(f"[圖{idx+1}] {cm_a11y}")
+                        cm_cands = (cm.get("image_versions2") or {}).get("candidates") or []
+                        if isinstance(cm_cands, list) and cm_cands:
+                            u_url = str(cm_cands[0].get("url") or "")
+                            if u_url and u_url not in image_urls:
+                                image_urls.append(u_url)
+                if carousel_a11y and not accessibility_caption:
+                    accessibility_caption = " | ".join(carousel_a11y)
+
+                # 提取 Reel / 影片音訊與音樂資訊 (clips_metadata)
+                clips_meta = m.get("clips_metadata") or {}
+                if isinstance(clips_meta, dict):
+                    music_info = clips_meta.get("music_info") or {}
+                    music_asset = music_info.get("music_asset_info") if isinstance(music_info, dict) else {}
+                    orig_sound = clips_meta.get("original_sound_info") or {}
+                    if isinstance(music_asset, dict) and (music_asset.get("title") or music_asset.get("display_artist")):
+                        audio_info = f"配樂：{music_asset.get('title', '')} - {music_asset.get('display_artist', '')}".strip(" -")
+                    elif isinstance(orig_sound, dict) and orig_sound.get("original_audio_title"):
+                        ig_artist = (orig_sound.get("ig_artist") or {}).get("username", "")
+                        audio_info = f"原聲：{orig_sound.get('original_audio_title', '')}" + (f" (@{ig_artist})" if ig_artist else "")
+
+                loc = m.get("location") or {}
+                if isinstance(loc, dict) and loc.get("name"):
+                    location_name = str(loc.get("name") or "")
+
                 taken_at = str(m.get("taken_at") or "")
                 u = m.get("user") or {}
                 user_info = {
@@ -175,17 +227,26 @@ class InstagramCore:
                     if cname:
                         coauthors.append(cname)
             else:
-                pk = str(getattr(m, "pk", ""))
+                pk = str(getattr(m, "pk", "")).split("_")[0]
                 id_ = str(getattr(m, "id", ""))
                 code = str(getattr(m, "code", ""))
                 caption = str(getattr(m, "caption_text", "") or "")
+                title = str(getattr(m, "title", "") or "")
+                accessibility_caption = str(getattr(m, "accessibility_caption", "") or "")
                 like_count = int(getattr(m, "like_count", 0) or 0)
                 comment_count = int(getattr(m, "comment_count", 0) or 0)
-                view_count = int(getattr(m, "view_count", 0) or 0)
+                view_count = int(getattr(m, "view_count", 0) or getattr(m, "play_count", 0) or 0)
                 media_type = int(getattr(m, "media_type", 1) or 1)
                 product_type = str(getattr(m, "product_type", "feed") or "feed")
+                video_duration = float(getattr(m, "video_duration", 0.0) or 0.0)
                 video_url = str(getattr(m, "video_url", "") or "")
                 thumbnail_url = str(getattr(m, "thumbnail_url", "") or "")
+                if thumbnail_url:
+                    image_urls.append(thumbnail_url)
+                for res_item in getattr(m, "resources", []) or []:
+                    r_thumb = str(getattr(res_item, "thumbnail_url", "") or "")
+                    if r_thumb and r_thumb not in image_urls:
+                        image_urls.append(r_thumb)
                 taken_at = m.taken_at.isoformat() if hasattr(m, "taken_at") and m.taken_at else ""
 
                 u = getattr(m, "user", None)
@@ -212,7 +273,12 @@ class InstagramCore:
                 "pk": pk,
                 "id": id_,
                 "code": code,
+                "title": title,
                 "caption": caption,
+                "accessibility_caption": accessibility_caption,
+                "audio_info": audio_info,
+                "location_name": location_name,
+                "video_duration": video_duration,
                 "like_count": like_count,
                 "comment_count": comment_count,
                 "view_count": view_count,
@@ -223,16 +289,154 @@ class InstagramCore:
                 "is_reel": is_reel,
                 "is_carousel": is_carousel,
                 "thumbnail_url": thumbnail_url,
+                "image_urls": image_urls[:4],
                 "video_url": video_url,
                 "user": user_info,
                 "is_collaborative": len(coauthors) > 0,
                 "coauthors": coauthors,
-                "url": f"https://www.instagram.com/p/{code}/" if code else "",
+                "url": f"https://www.instagram.com/reel/{code}/" if (code and is_reel) else (f"https://www.instagram.com/p/{code}/" if code else ""),
                 "taken_at": taken_at,
             }
         except Exception as err:
             logger.warning(f"Error parsing media item: {err}")
             return None
+
+    def _extract_medias_from_raw(self, raw_data: Any, limit: int = 30) -> List[Dict[str, Any]]:
+        """遞迴從 Instagram 原始 API 回應 (如 fbsearch/top_serp, reels_serp, sections 等) 提取所有貼文與短片節點"""
+        extracted: List[Dict[str, Any]] = []
+        seen_keys = set()
+
+        def _walk(node: Any, depth: int = 0):
+            if depth > 14 or len(extracted) >= limit or node is None:
+                return
+            if isinstance(node, dict):
+                has_id = bool(node.get("pk") or node.get("id"))
+                has_code = bool(node.get("code"))
+                has_media_indicator = any(
+                    k in node for k in ("media_type", "product_type", "caption", "caption_text", "image_versions2", "video_versions")
+                )
+                if has_id and has_code and has_media_indicator:
+                    parsed = self._parse_media_item(node)
+                    if parsed:
+                        key = parsed.get("pk") or parsed.get("code")
+                        if key and key not in seen_keys:
+                            seen_keys.add(key)
+                            extracted.append(parsed)
+                            return
+
+                for k, v in node.items():
+                    if k in ("comments", "preview_comments", "likers", "facepile_top_likers"):
+                        continue
+                    _walk(v, depth + 1)
+            elif isinstance(node, list):
+                for item in node:
+                    if len(extracted) >= limit:
+                        break
+                    _walk(item, depth + 1)
+
+        _walk(raw_data, 0)
+        return extracted
+
+    def fuzzy_search_posts(self, query: str, limit: int = 10) -> Dict[str, Any]:
+        """模糊搜尋貼文與短片 (Fuzzy Search)：
+        結合 Instagram 綜合搜尋 (top_serp)、Reels 關鍵字搜尋 (reels_serp) 與相關公開創作者最新貼文，
+        解決單純使用 Hashtag (tags/sections) 經常抓取到 0 則貼文的問題。
+        """
+        q = query.lstrip("#@").strip()
+        if not q:
+            return {"ok": False, "error": "搜尋關鍵字不可為空", "query": "", "posts": []}
+
+        logger.info(f"Fuzzy searching posts for keyword '{q}' with limit {limit}...")
+        self._apply_read_pacing(1.2, 2.5)
+
+        results: List[Dict[str, Any]] = []
+        seen_pks = set()
+        sources_used: List[str] = []
+        matched_usernames: List[str] = []
+
+        def _add_parsed_item(item: Optional[Dict[str, Any]], source_tag: str):
+            if not item:
+                return
+            pk = str(item.get("pk") or item.get("code") or "")
+            if not pk or pk in seen_pks:
+                return
+            seen_pks.add(pk)
+            results.append(item)
+            if source_tag not in sources_used:
+                sources_used.append(source_tag)
+
+        # 1. 第一階段：Instagram Top SERP 綜合模糊搜尋 (fbsearch/top_serp/)
+        try:
+            if hasattr(self.cl, "fbsearch_topsearch_v2"):
+                raw_top = self.cl.fbsearch_topsearch_v2(q)
+                if isinstance(raw_top, dict):
+                    for m in self._extract_medias_from_raw(raw_top, limit=limit * 2):
+                        _add_parsed_item(m, "top_serp")
+                        if len(results) >= limit:
+                            break
+                    # 順便收集 SERP 中推薦的公開帳號作為後續備援
+                    for u in raw_top.get("users", []) or []:
+                        ud = u.get("user") if isinstance(u, dict) and "user" in u else u
+                        if isinstance(ud, dict) and not ud.get("is_private") and ud.get("username"):
+                            matched_usernames.append(str(ud.get("username")))
+        except Exception as e1:
+            logger.debug(f"fbsearch_topsearch_v2 notice for '{q}': {e1}")
+
+        # 若 instagrapi media_search 可補充
+        if len(results) < limit and hasattr(self.cl, "media_search"):
+            try:
+                ms_items = self.cl.media_search(q, amount=limit)
+                for m in ms_items or []:
+                    _add_parsed_item(self._parse_media_item(m), "media_search")
+                    if len(results) >= limit:
+                        break
+            except Exception as ems:
+                logger.debug(f"media_search notice for '{q}': {ems}")
+
+        # 2. 第二階段：Instagram Reels 關鍵字模糊搜尋 (fbsearch/reels_serp/)
+        if len(results) < limit and hasattr(self.cl, "fbsearch_reels_v2"):
+            try:
+                self._apply_read_pacing(1.0, 2.0)
+                raw_reels = self.cl.fbsearch_reels_v2(q)
+                if isinstance(raw_reels, dict):
+                    for m in self._extract_medias_from_raw(raw_reels, limit=limit * 2):
+                        _add_parsed_item(m, "reels_serp")
+                        if len(results) >= limit:
+                            break
+            except Exception as e2:
+                logger.debug(f"fbsearch_reels_v2 notice for '{q}': {e2}")
+
+        # 3. 第三階段：關鍵字模糊匹配相關創作者帳號並抓取其最新貼文/短片 (Users Search -> User Medias/Clips)
+        if len(results) < limit:
+            try:
+                if not matched_usernames:
+                    users = self.cl.search_users(q)
+                    for u in (users or [])[:5]:
+                        if not getattr(u, "is_private", False) and getattr(u, "username", ""):
+                            matched_usernames.append(str(getattr(u, "username")))
+
+                for uname in matched_usernames[:2]:
+                    if len(results) >= limit:
+                        break
+                    self._apply_read_pacing(1.0, 2.0)
+                    need = max(2, min(5, limit - len(results)))
+                    user_res = self.get_user_medias(uname, limit=need)
+                    for p in user_res.get("posts", []) or []:
+                        _add_parsed_item(p, f"user:{uname}")
+                        if len(results) >= limit:
+                            break
+            except Exception as e3:
+                logger.debug(f"fuzzy user medias fallback notice for '{q}': {e3}")
+
+        logger.info(f"Fuzzy search for '{q}' retrieved {len(results)} posts (sources={sources_used})")
+        return {
+            "ok": True,
+            "query": q,
+            "count": len(results),
+            "posts": results[:limit],
+            "sources": sources_used,
+            "status": "success" if len(results) > 0 else "empty",
+        }
 
     def search_hashtag_posts(self, hashtag: str, limit: int = 10) -> Dict[str, Any]:
         """搜尋指定 Hashtag 的最新貼文，包含防空判定與詳細診斷"""
@@ -249,11 +453,20 @@ class InstagramCore:
         except Exception as e:
             logger.warning(f"hashtag_medias_recent failed for #{tag}: {e}")
             api_error = str(e)
+
+        # 若 recent 回傳 0 則 (Instagram 經常對 recent tab 回傳空列表而不拋錯)，自動嘗試 top 與 reels_v1
+        if not medias:
             try:
                 medias = self.cl.hashtag_medias_top(tag, amount=limit)
             except Exception as e2:
-                logger.error(f"hashtag_medias_top failed for #{tag}: {e2}")
+                logger.debug(f"hashtag_medias_top failed for #{tag}: {e2}")
                 api_error = str(e2)
+
+        if not medias and hasattr(self.cl, "hashtag_medias_reels_v1"):
+            try:
+                medias = self.cl.hashtag_medias_reels_v1(tag, amount=limit)
+            except Exception as e3:
+                logger.debug(f"hashtag_medias_reels_v1 failed for #{tag}: {e3}")
 
         results = []
         for m in medias:
@@ -264,7 +477,7 @@ class InstagramCore:
         logger.info(f"Retrieved {len(results)} posts for #{tag}")
         notice = None
         if len(results) == 0:
-            notice = f"標籤 #{tag} 取得 0 則貼文。可能因 Instagram 官方限制公開 Hashtag API 或該標籤內容受限。建議使用「指定帳號 (get_user_medias)」或「動態探索 (get_timeline_feed)」進行精準瀏覽。"
+            notice = f"標籤 #{tag} 取得 0 則貼文。可能因 Instagram 官方限制公開 Hashtag API 或該標籤內容受限。建議使用「模糊搜尋 (ig_fuzzy_search_posts)」、「指定帳號 (get_user_medias)」或「動態探索 (get_timeline_feed)」。"
 
         return {
             "ok": True,
@@ -450,49 +663,202 @@ class InstagramCore:
             logger.error(f"search_tags error: {e}")
             return []
 
-    def get_post_context(self, media_pk: str, comment_limit: int = 10) -> Dict[str, Any]:
-        """抓取特定貼文的完整上下文（內文、發布者、鄰近留言列表）"""
+    def get_post_context(self, media_pk: str, comment_limit: int = 15) -> Dict[str, Any]:
+        """抓取特定貼文或 Reel 的完整上下文（內文、標題、無障礙視覺描述、音訊配樂、字幕與包含子留言的完整評論列表）"""
         self._apply_read_pacing(1.0, 2.5)
-        logger.info(f"Fetching context for media PK: {media_pk}...")
-        try:
-            media = self.cl.media_info(media_pk)
-        except Exception as e:
-            logger.error(f"Failed to fetch media_info for {media_pk}: {e}")
-            return {"error": f"Failed to get media info: {e}", "ok": False}
+        clean_pk = str(media_pk).strip().split("_")[0]
+        logger.info(f"Fetching full post/reel context for media PK: {clean_pk}...")
 
-        comments_data = []
+        parsed_media: Optional[Dict[str, Any]] = None
+        video_subtitles_text = ""
+
+        # 1. 優先使用底層 private_request("media/{pk}/info/") 取得完整原始字典
+        #    避免 instagrapi media_info 對新版 Reels / Clips 因 Pydantic 欄位變動拋出驗證錯誤，
+        #    並能完整提取 accessibility_caption、clips_metadata (音樂/原聲)、video_subtitles_uri 與多張圖片 URL
         try:
-            raw_comments = self.cl.media_comments(media_pk, amount=comment_limit)
-            for c in raw_comments:
-                comments_data.append({
-                    "pk": str(c.pk),
-                    "text": str(c.text or ""),
+            raw_info = self.cl.private_request(f"media/{clean_pk}/info/")
+            items = raw_info.get("items") if isinstance(raw_info, dict) else None
+            if isinstance(items, list) and len(items) > 0 and isinstance(items[0], dict):
+                item0 = items[0]
+                parsed_media = self._parse_media_item(item0)
+                sub_uri = str(item0.get("video_subtitles_uri") or "")
+                if sub_uri:
+                    try:
+                        import urllib.request
+                        import re as _re
+                        req = urllib.request.Request(sub_uri, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(req, timeout=5) as resp:
+                            sub_raw = resp.read().decode("utf-8", errors="ignore")
+                            lines = []
+                            for ln in sub_raw.splitlines():
+                                ln_s = ln.strip()
+                                if not ln_s or ln_s.startswith("WEBVTT") or "-->" in ln_s or ln_s.isdigit():
+                                    continue
+                                clean_ln = _re.sub(r"<[^>]+>", "", ln_s).strip()
+                                if clean_ln and (not lines or lines[-1] != clean_ln):
+                                    lines.append(clean_ln)
+                            video_subtitles_text = " ".join(lines)[:1000]
+                    except Exception as sub_err:
+                        logger.debug(f"Fetch video_subtitles_uri notice: {sub_err}")
+        except Exception as raw_err:
+            logger.debug(f"private_request media info fallback for {clean_pk}: {raw_err}")
+
+        # 2. 若 private_request 未取得，回退使用 instagrapi media_info
+        if not parsed_media:
+            try:
+                media = self.cl.media_info(clean_pk)
+                parsed_media = self._parse_media_item(media) or {
+                    "pk": str(media.pk),
+                    "code": str(media.code),
+                    "caption": str(media.caption_text or ""),
+                    "like_count": int(getattr(media, "like_count", 0) or 0),
+                    "comment_count": int(getattr(media, "comment_count", 0) or 0),
                     "user": {
-                        "pk": str(getattr(c.user, "pk", "")),
-                        "username": str(getattr(c.user, "username", "")),
-                    } if hasattr(c, "user") and c.user else {},
-                    "created_at_utc": c.created_at_utc.isoformat() if hasattr(c, "created_at_utc") and c.created_at_utc else "",
-                })
-        except Exception as e:
-            logger.warning(f"Failed to fetch comments for {media_pk}: {e}")
+                        "pk": str(getattr(media.user, "pk", "")),
+                        "username": str(getattr(media.user, "username", "")),
+                    } if hasattr(media, "user") and media.user else {},
+                    "url": f"https://www.instagram.com/p/{media.code}/",
+                }
+            except Exception as e:
+                logger.error(f"Failed to fetch media_info for {clean_pk}: {e}")
+                return {"error": f"Failed to get media info: {e}", "ok": False}
 
-        parsed_media = self._parse_media_item(media) or {
-            "pk": str(media.pk),
-            "code": str(media.code),
-            "caption": str(media.caption_text or ""),
-            "like_count": int(getattr(media, "like_count", 0) or 0),
-            "comment_count": int(getattr(media, "comment_count", 0) or 0),
-            "user": {
-                "pk": str(getattr(media.user, "pk", "")),
-                "username": str(getattr(media.user, "username", "")),
-            } if hasattr(media, "user") and media.user else {},
-            "url": f"https://www.instagram.com/p/{media.code}/",
-        }
+        if video_subtitles_text:
+            parsed_media["video_subtitles"] = video_subtitles_text
+
+        # 3. 抓取貼文或 Reel 的留言與巢狀子留言 (preview_child_comments)
+        comments_data: List[Dict[str, Any]] = []
+        seen_comment_pks = set()
+        try:
+            raw_cmt_res = self.cl.private_request(
+                f"media/{clean_pk}/comments/",
+                params={"can_support_threading": "true", "permalink_enabled": "false"},
+            )
+            if isinstance(raw_cmt_res, dict):
+                raw_list = raw_cmt_res.get("comments") or []
+                for c in raw_list[: max(comment_limit, 20)]:
+                    if not isinstance(c, dict):
+                        continue
+                    c_pk = str(c.get("pk") or "")
+                    c_text = str(c.get("text") or "")
+                    c_user = c.get("user") or {}
+                    c_username = str(c_user.get("username") or "")
+                    if c_pk and c_pk not in seen_comment_pks:
+                        seen_comment_pks.add(c_pk)
+                        comments_data.append({
+                            "pk": c_pk,
+                            "text": c_text,
+                            "user": {
+                                "pk": str(c_user.get("pk") or ""),
+                                "username": c_username,
+                            },
+                            "created_at_utc": str(c.get("created_at_utc") or c.get("created_at") or ""),
+                            "parent_comment_pk": "",
+                            "parent_comment_user": "",
+                            "parent_comment_text": "",
+                        })
+                    # 同時展開 preview_child_comments (樓中樓子留言被 @ 的情況)
+                    for child in c.get("preview_child_comments") or []:
+                        if not isinstance(child, dict):
+                            continue
+                        ch_pk = str(child.get("pk") or "")
+                        ch_text = str(child.get("text") or "")
+                        ch_user = child.get("user") or {}
+                        ch_username = str(ch_user.get("username") or "")
+                        if ch_pk and ch_pk not in seen_comment_pks:
+                            seen_comment_pks.add(ch_pk)
+                            comments_data.append({
+                                "pk": ch_pk,
+                                "text": ch_text,
+                                "user": {
+                                    "pk": str(ch_user.get("pk") or ""),
+                                    "username": ch_username,
+                                },
+                                "created_at_utc": str(child.get("created_at_utc") or child.get("created_at") or ""),
+                                "parent_comment_pk": c_pk,
+                                "parent_comment_user": c_username,
+                                "parent_comment_text": c_text,
+                            })
+        except Exception as raw_cmt_err:
+            logger.debug(f"private_request comments fallback for {clean_pk}: {raw_cmt_err}")
+
+        if not comments_data:
+            try:
+                raw_comments = self.cl.media_comments(clean_pk, amount=comment_limit)
+                for c in raw_comments:
+                    c_pk = str(c.pk)
+                    if c_pk not in seen_comment_pks:
+                        seen_comment_pks.add(c_pk)
+                        comments_data.append({
+                            "pk": c_pk,
+                            "text": str(c.text or ""),
+                            "user": {
+                                "pk": str(getattr(c.user, "pk", "")),
+                                "username": str(getattr(c.user, "username", "")),
+                            } if hasattr(c, "user") and c.user else {},
+                            "created_at_utc": c.created_at_utc.isoformat() if hasattr(c, "created_at_utc") and c.created_at_utc else "",
+                        })
+            except Exception as e:
+                logger.warning(f"Failed to fetch comments for {clean_pk}: {e}")
 
         return {
             "ok": True,
             "media": parsed_media,
             "comments": comments_data,
+        }
+
+    def get_recent_mentions(self, limit: int = 20) -> Dict[str, Any]:
+        """從 Instagram 通知收件匣 (news/inbox) 探索近期提及 (@mention) 或回覆機器人的貼文與 Reel PK 清單"""
+        self._apply_read_pacing(1.0, 2.0)
+        logger.info(f"Checking news/inbox for recent @mentions and comment replies (limit={limit})...")
+        media_pks: List[str] = []
+        mention_items: List[Dict[str, Any]] = []
+        try:
+            inbox = self.cl.private_request("news/inbox/", params={"mark_as_seen": "false"})
+            if isinstance(inbox, dict):
+                stories = (inbox.get("new_stories") or []) + (inbox.get("old_stories") or [])
+                for st in stories:
+                    if not isinstance(st, dict):
+                        continue
+                    args = st.get("args") or {}
+                    if not isinstance(args, dict):
+                        continue
+                    text = str(args.get("text") or args.get("rich_text") or "")
+                    notif_name = str(st.get("notif_name") or "")
+                    story_type = st.get("type")
+                    # 擷取通知關聯的 media pk
+                    medias = args.get("media") or []
+                    found_pk = ""
+                    if isinstance(medias, list) and len(medias) > 0 and isinstance(medias[0], dict):
+                        raw_id = str(medias[0].get("id") or medias[0].get("pk") or "")
+                        found_pk = raw_id.split("_")[0].strip()
+                    if not found_pk:
+                        dest = str(args.get("destination") or "")
+                        if "media?id=" in dest:
+                            found_pk = dest.split("media?id=")[-1].split("&")[0].split("_")[0].strip()
+
+                    if found_pk and found_pk.isdigit():
+                        comment_id = str(args.get("comment_id") or "")
+                        if found_pk not in media_pks:
+                            media_pks.append(found_pk)
+                        mention_items.append({
+                            "media_pk": found_pk,
+                            "comment_pk": comment_id,
+                            "text": text,
+                            "notif_name": notif_name,
+                            "story_type": story_type,
+                            "timestamp": str(args.get("timestamp") or ""),
+                        })
+                        if len(media_pks) >= limit:
+                            break
+        except Exception as e:
+            logger.warning(f"get_recent_mentions news/inbox notice: {e}")
+            return {"ok": False, "error": str(e), "media_pks": [], "mentions": []}
+
+        return {
+            "ok": True,
+            "media_pks": media_pks,
+            "mentions": mention_items[:limit],
         }
 
     def post_comment(
@@ -561,15 +927,30 @@ class InstagramCore:
         """讀取未讀或最近的私訊線程（唯讀，自帶讀取微延遲）"""
         self._apply_read_pacing(1.0, 2.5)
         logger.info(f"Fetching direct threads (limit={limit})...")
+        threads = []
         try:
             threads = self.cl.direct_threads(amount=limit, selected_filter="unread")
         except Exception as e:
-            logger.warning(f"direct_threads(unread) failed: {e}, falling back to all threads...")
+            logger.warning(f"direct_threads(unread) failed: {e}")
+
+        # 若 unread filter 未抓到任何線程（已被點開看過、或帳號類型不支援該 filter），fallback 抓取全部最近對話
+        if not threads:
             try:
                 threads = self.cl.direct_threads(amount=limit)
             except Exception as e2:
                 logger.error(f"Failed to fetch direct threads: {e2}")
-                return []
+                threads = []
+
+        # 同時抓取 pending (訊息要求 / Message Requests)，確保陌生私訊與請求不被遺漏
+        try:
+            pending = self.cl.direct_pending_inbox()
+            if isinstance(pending, list):
+                existing_ids = {str(getattr(t, "id", "")) for t in threads}
+                for pt in pending:
+                    if str(getattr(pt, "id", "")) not in existing_ids:
+                        threads.append(pt)
+        except Exception as pe:
+            logger.debug(f"direct_pending_inbox check: {pe}")
 
         results = []
         current_user_id = str(getattr(self.cl, "user_id", ""))
@@ -670,36 +1051,49 @@ class InstagramCore:
 
     def get_timeline_feed(self, limit: int = 10) -> List[Dict[str, Any]]:
         """讀取時間軸動態牆 (Timeline Feed) 或探索貼文，支援動態滾動探索（自帶微延遲）"""
-        self._apply_read_pacing(1.5, 3.5)
+        self._apply_read_pacing(1.5, 3.0)
         logger.info(f"Fetching timeline/explore feed (limit={limit})...")
-        medias = []
+        results = []
+        seen_pks = set()
         try:
             try:
                 raw_items = self.cl.get_timeline_feed()
-                if isinstance(raw_items, dict) and "feed_items" in raw_items:
-                    for item in raw_items.get("feed_items", []):
-                        m = item.get("media_or_ad")
-                        if m and not item.get("is_ad"):
-                            medias.append(m)
-                            if len(medias) >= limit:
-                                break
+                if isinstance(raw_items, dict):
+                    if "feed_items" in raw_items:
+                        for item in raw_items.get("feed_items", []):
+                            m = item.get("media_or_ad") or item.get("explore_story", {}).get("media_or_ad")
+                            if m and not item.get("is_ad") and not m.get("dr_ad_type"):
+                                parsed = self._parse_media_item(m)
+                                if parsed and parsed.get("pk") not in seen_pks:
+                                    seen_pks.add(parsed.get("pk"))
+                                    results.append(parsed)
+                                    if len(results) >= limit:
+                                        break
+                    if len(results) < limit:
+                        for parsed in self._extract_medias_from_raw(raw_items, limit=limit):
+                            pk = parsed.get("pk")
+                            if pk and pk not in seen_pks:
+                                seen_pks.add(pk)
+                                results.append(parsed)
+                                if len(results) >= limit:
+                                    break
             except Exception as e:
                 logger.warning(f"get_timeline_feed fallback: {e}")
 
-            if not medias:
+            if not results:
                 try:
-                    explore_posts = self.cl.explore_reels(amount=max(1, limit))
-                    return [self._parse_media_item(m) for m in explore_posts if self._parse_media_item(m)]
+                    # 限制單次 explore_reels 數量，避免多次分頁請求導致超過 MCP timeout
+                    explore_posts = self.cl.explore_reels(amount=max(1, min(limit, 8)))
+                    for m in explore_posts:
+                        parsed = self._parse_media_item(m)
+                        if parsed and parsed.get("pk") not in seen_pks:
+                            seen_pks.add(parsed.get("pk"))
+                            results.append(parsed)
                 except Exception as ex:
                     logger.error(f"explore_reels fallback failed: {ex}")
                     return []
 
-            results = []
-            for m in medias:
-                parsed = self._parse_media_item(m)
-                if parsed:
-                    results.append(parsed)
-            return results
+            return results[:limit]
         except Exception as e:
             logger.error(f"Failed to fetch timeline feed: {e}")
             return []

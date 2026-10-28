@@ -45,6 +45,16 @@ export function getSharedMcpClient(): InstagramMcpClient | null {
   return getSharedMcpService()?.client || null
 }
 
+export function getSharedBotUsername(): string {
+  const svc = getSharedMcpService()
+  return String(svc?.loginStatus?.username || svc?.config?.username || '').replace(/^@/, '').trim()
+}
+
+export function getSharedMasterUsername(): string {
+  const svc = getSharedMcpService()
+  return String(svc?.config?.masterUsername || '').replace(/^@/, '').trim()
+}
+
 export const name = 'instagram-mcp'
 export const inject = ['tools', 'webServer']
 
@@ -226,8 +236,15 @@ export function apply(ctx: any, userConfig: Partial<InstagramMcpConfig> = {}) {
       const url = new URL(req.url, 'http://127.0.0.1')
       const pathname = url.pathname
 
-      // 讀取當前 FastMCP 配置
+      // 讀取當前 FastMCP 配置 (每次讀取時同步磁碟 config.json，確保外部或跨插件修改即時生效)
       if (req.method === 'GET' && pathname === '/api/instagram/mcp/config') {
+        try {
+          if (existsSync(configFile)) {
+            const diskCfg = JSON.parse(readFileSync(configFile, 'utf-8'))
+            activeConfig = sanitizeMcpConfig({ ...activeConfig, ...diskCfg })
+            service.config = activeConfig
+          }
+        } catch {}
         return sendJson(res, 200, { ok: true, config: activeConfig })
       }
 
@@ -235,6 +252,7 @@ export function apply(ctx: any, userConfig: Partial<InstagramMcpConfig> = {}) {
       if (req.method === 'POST' && pathname === '/api/instagram/mcp/config') {
         const body = await readBody(req)
         activeConfig = sanitizeMcpConfig({ ...activeConfig, ...body })
+        service.config = activeConfig
         try {
           writeFileSync(configFile, JSON.stringify(activeConfig, null, 2), 'utf-8')
         } catch (e) {
@@ -253,11 +271,15 @@ export function apply(ctx: any, userConfig: Partial<InstagramMcpConfig> = {}) {
             if (ar?.ok) antiRisk = ar.anti_risk
           } catch {}
         }
+        const botUsername = String(service.loginStatus?.username || activeConfig.username || '').replace(/^@/, '').trim()
+        const masterUsername = String(activeConfig.masterUsername || '').replace(/^@/, '').trim()
         return sendJson(res, 200, {
           ok: true,
           mcpRunning: Boolean(mcpClient?.isRunning),
           mcpReady: Boolean(mcpClient?.ready),
           loginStatus: service.loginStatus,
+          botUsername,
+          masterUsername,
           sessionExists: existsSync(sessFile),
           sessionPath: activeConfig.sessionPath,
           pythonPath: activeConfig.pythonPath,

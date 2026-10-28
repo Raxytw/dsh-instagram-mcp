@@ -6,7 +6,13 @@ export interface InstagramPost {
   pk: string
   id: string
   code: string
+  title?: string
   caption: string
+  accessibility_caption?: string
+  audio_info?: string
+  location_name?: string
+  video_duration?: number
+  video_subtitles?: string
   like_count: number
   comment_count: number
   view_count?: number
@@ -17,6 +23,7 @@ export interface InstagramPost {
   is_reel?: boolean
   is_carousel?: boolean
   thumbnail_url?: string
+  image_urls?: string[]
   video_url?: string
   user: {
     pk: string
@@ -38,6 +45,23 @@ export interface InstagramComment {
     username: string
   }
   created_at_utc: string
+  parent_comment_pk?: string
+  parent_comment_user?: string
+  parent_comment_text?: string
+}
+
+export interface InstagramRecentMentionsResult {
+  ok: boolean
+  media_pks: string[]
+  mentions: Array<{
+    media_pk: string
+    comment_pk?: string
+    text?: string
+    notif_name?: string
+    story_type?: any
+    timestamp?: string
+  }>
+  error?: string
 }
 
 export interface InstagramPostContext {
@@ -123,6 +147,16 @@ export interface InstagramSearchTagsResult {
     name: string
     media_count: number
   }>
+}
+
+export interface InstagramFuzzySearchResult {
+  ok: boolean
+  query: string
+  count: number
+  posts: InstagramPost[]
+  sources?: string[]
+  status?: string
+  error?: string
 }
 
 export interface InstagramAntiRiskStatus {
