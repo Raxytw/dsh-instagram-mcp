@@ -726,7 +726,18 @@ class InstagramCore:
         if video_subtitles_text:
             parsed_media["video_subtitles"] = video_subtitles_text
 
-        # 3. 抓取貼文或 Reel 的留言與巢狀子留言 (preview_child_comments)
+        # 提取貼文內文中的圖片或文件連結
+        caption_urls = self._extract_urls_from_text(str(parsed_media.get("caption") or ""))
+        if caption_urls["image_urls"]:
+            existing_imgs = list(parsed_media.get("image_urls") or [])
+            for u in caption_urls["image_urls"]:
+                if u not in existing_imgs:
+                    existing_imgs.append(u)
+            parsed_media["image_urls"] = existing_imgs
+        if caption_urls["file_urls"]:
+            parsed_media["file_urls"] = caption_urls["file_urls"]
+
+        # 3. 抓取貼文或 Reel 的留言與巢狀子留言 (preview_child_comments)，並提取留言附帶的圖片與文件連結
         comments_data: List[Dict[str, Any]] = []
         seen_comment_pks = set()
         try:
@@ -743,6 +754,7 @@ class InstagramCore:
                     c_text = str(c.get("text") or "")
                     c_user = c.get("user") or {}
                     c_username = str(c_user.get("username") or "")
+                    c_media_meta = self._extract_comment_media_and_files(c, c_text)
                     if c_pk and c_pk not in seen_comment_pks:
                         seen_comment_pks.add(c_pk)
                         comments_data.append({
@@ -756,6 +768,8 @@ class InstagramCore:
                             "parent_comment_pk": "",
                             "parent_comment_user": "",
                             "parent_comment_text": "",
+                            "image_urls": c_media_meta["image_urls"],
+                            "file_urls": c_media_meta["file_urls"],
                         })
                     # 同時展開 preview_child_comments (樓中樓子留言被 @ 的情況)
                     for child in c.get("preview_child_comments") or []:
@@ -765,6 +779,7 @@ class InstagramCore:
                         ch_text = str(child.get("text") or "")
                         ch_user = child.get("user") or {}
                         ch_username = str(ch_user.get("username") or "")
+                        ch_media_meta = self._extract_comment_media_and_files(child, ch_text)
                         if ch_pk and ch_pk not in seen_comment_pks:
                             seen_comment_pks.add(ch_pk)
                             comments_data.append({
@@ -778,6 +793,8 @@ class InstagramCore:
                                 "parent_comment_pk": c_pk,
                                 "parent_comment_user": c_username,
                                 "parent_comment_text": c_text,
+                                "image_urls": ch_media_meta["image_urls"],
+                                "file_urls": ch_media_meta["file_urls"],
                             })
         except Exception as raw_cmt_err:
             logger.debug(f"private_request comments fallback for {clean_pk}: {raw_cmt_err}")
@@ -787,16 +804,20 @@ class InstagramCore:
                 raw_comments = self.cl.media_comments(clean_pk, amount=comment_limit)
                 for c in raw_comments:
                     c_pk = str(c.pk)
+                    c_text = str(c.text or "")
+                    c_urls = self._extract_urls_from_text(c_text)
                     if c_pk not in seen_comment_pks:
                         seen_comment_pks.add(c_pk)
                         comments_data.append({
                             "pk": c_pk,
-                            "text": str(c.text or ""),
+                            "text": c_text,
                             "user": {
                                 "pk": str(getattr(c.user, "pk", "")),
                                 "username": str(getattr(c.user, "username", "")),
                             } if hasattr(c, "user") and c.user else {},
                             "created_at_utc": c.created_at_utc.isoformat() if hasattr(c, "created_at_utc") and c.created_at_utc else "",
+                            "image_urls": c_urls["image_urls"],
+                            "file_urls": c_urls["file_urls"],
                         })
             except Exception as e:
                 logger.warning(f"Failed to fetch comments for {clean_pk}: {e}")
@@ -806,6 +827,101 @@ class InstagramCore:
             "media": parsed_media,
             "comments": comments_data,
         }
+
+    def _extract_urls_from_text(self, text: str) -> Dict[str, List[str]]:
+        """從文字中提取圖片連結與文件/檔案連結"""
+        image_urls: List[str] = []
+        file_urls: List[str] = []
+        if not text:
+            return {"image_urls": image_urls, "file_urls": file_urls}
+        urls = re.findall(r"https?://[^\s<>\"')\]]+", text)
+        for u in urls:
+            lower = u.lower().split("?")[0]
+            if any(lower.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")):
+                if u not in image_urls:
+                    image_urls.append(u)
+            elif any(lower.endswith(ext) for ext in (".txt", ".md", ".json", ".csv", ".pdf", ".log", ".xml", ".yaml", ".yml", ".py", ".ts", ".js", ".html", ".srt", ".vtt")) or "pastebin.com/raw/" in lower or "gist.githubusercontent.com" in lower or "raw.githubusercontent.com" in lower:
+                if u not in file_urls:
+                    file_urls.append(u)
+        return {"image_urls": image_urls, "file_urls": file_urls}
+
+    def _extract_comment_media_and_files(self, comment_dict: Dict[str, Any], text: str) -> Dict[str, List[str]]:
+        """從單則留言原始 dict 與文字中提取附帶圖片 (如 GIF/貼圖/媒體附件) 與文件 URL"""
+        extracted = self._extract_urls_from_text(text)
+        image_urls = list(extracted["image_urls"])
+        file_urls = list(extracted["file_urls"])
+        try:
+            media_info = comment_dict.get("media_info") or comment_dict.get("giphy_media_info") or comment_dict.get("comment_media")
+            if isinstance(media_info, dict):
+                iv2 = media_info.get("image_versions2") or {}
+                if isinstance(iv2, dict):
+                    cands = iv2.get("candidates") or []
+                    if isinstance(cands, list) and len(cands) > 0 and isinstance(cands[0], dict):
+                        u = str(cands[0].get("url") or "")
+                        if u.startswith("http") and u not in image_urls:
+                            image_urls.append(u)
+                images = media_info.get("images") or {}
+                if isinstance(images, dict):
+                    fixed = images.get("fixed_height") or images.get("original") or {}
+                    if isinstance(fixed, dict):
+                        u = str(fixed.get("url") or "")
+                        if u.startswith("http") and u not in image_urls:
+                            image_urls.append(u)
+        except Exception:
+            pass
+        return {"image_urls": image_urls, "file_urls": file_urls}
+
+    def _prepare_local_media_file(self, path_or_url: str, suffix: str = ".jpg") -> Optional[Path]:
+        """將本地路徑、HTTP(S) URL 或 data:image/...;base64 轉為本地暫存檔 Path"""
+        if not path_or_url or not str(path_or_url).strip():
+            return None
+        raw = str(path_or_url).strip()
+        import base64
+        import tempfile
+        import urllib.request
+
+        if os.path.exists(raw) and os.path.isfile(raw):
+            return Path(raw).resolve()
+
+        if raw.startswith("data:"):
+            try:
+                header, b64_data = raw.split(",", 1)
+                ext = suffix
+                if "image/png" in header:
+                    ext = ".png"
+                elif "image/webp" in header:
+                    ext = ".webp"
+                elif "image/gif" in header:
+                    ext = ".gif"
+                raw_bytes = base64.b64decode(b64_data)
+                tmp_dir = Path(tempfile.gettempdir()) / "dsh_ig_media"
+                tmp_dir.mkdir(parents=True, exist_ok=True)
+                tmp_path = tmp_dir / f"upload_{int(time.time() * 1000)}{ext}"
+                tmp_path.write_bytes(raw_bytes)
+                return tmp_path
+            except Exception as e:
+                logger.warning(f"Failed to decode data URL media: {e}")
+                return None
+
+        if raw.startswith("http://") or raw.startswith("https://"):
+            try:
+                tmp_dir = Path(tempfile.gettempdir()) / "dsh_ig_media"
+                tmp_dir.mkdir(parents=True, exist_ok=True)
+                clean_path = raw.split("?")[0].lower()
+                ext = suffix
+                for cand_ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".pdf", ".txt"):
+                    if clean_path.endswith(cand_ext):
+                        ext = cand_ext
+                        break
+                tmp_path = tmp_dir / f"dl_{int(time.time() * 1000)}{ext}"
+                req = urllib.request.Request(raw, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=15) as resp, open(tmp_path, "wb") as f:
+                    f.write(resp.read())
+                return tmp_path
+            except Exception as e:
+                logger.warning(f"Failed to download media URL {raw}: {e}")
+                return None
+        return None
 
     def get_recent_mentions(self, limit: int = 20) -> Dict[str, Any]:
         """從 Instagram 通知收件匣 (news/inbox) 探索近期提及 (@mention) 或回覆機器人的貼文與 Reel PK 清單"""
@@ -866,10 +982,13 @@ class InstagramCore:
         media_pk: str,
         text: str,
         reply_to_comment_pk: Optional[str] = None,
+        image_path: str = "",
+        image_url: str = "",
+        target_username: str = "",
         jitter_min: float = 6.0,
         jitter_max: float = 15.0,
     ) -> Dict[str, Any]:
-        """在貼文下發布留言或作為巢狀子留言回覆（包含防風控頻次檢查與熔斷）"""
+        """在貼文下發布留言或作為巢狀子留言回覆，並支援傳送圖片到 RM（透過連動私訊圖片或限動標註傳送圖片）"""
         perm = self.anti_risk.check_write_permission("comment")
         if not perm.get("allowed"):
             return {
@@ -882,21 +1001,93 @@ class InstagramCore:
         self._apply_jitter(jitter_min, jitter_max)
 
         replied_id = int(reply_to_comment_pk) if reply_to_comment_pk and str(reply_to_comment_pk).isdigit() else None
-        logger.info(f"Posting comment to media {media_pk} (reply_to={replied_id}): {text[:40]}...")
+        raw_img_source = (image_path or image_url or "").strip()
+        local_img = self._prepare_local_media_file(raw_img_source, suffix=".jpg") if raw_img_source else None
+
+        clean_target = (target_username or "").strip().lstrip("@")
+        if not clean_target and text:
+            m_at = re.search(r"@([A-Za-z0-9._]{2,30})", text)
+            if m_at:
+                clean_target = m_at.group(1)
+
+        effective_text = (text or "").strip()
+        if not effective_text and local_img:
+            effective_text = f"@{clean_target} 傳了一張圖給你 👀" if clean_target else "附上圖片 👀"
+
+        logger.info(f"Posting comment to media {media_pk} (reply_to={replied_id}, has_image={bool(local_img)}): {effective_text[:40]}...")
 
         try:
             cmt = self.cl.media_comment(
                 media_id=media_pk,
-                text=text,
+                text=effective_text,
                 replied_to_comment_id=replied_id,
             )
             self.anti_risk.record_action("comment", f"media_pk={media_pk}")
+
+            image_delivery: Dict[str, Any] = {"sent": False}
+            if local_img and local_img.exists():
+                target_uid: Optional[int] = None
+                if clean_target:
+                    try:
+                        uinfo = self.cl.user_info_by_username(clean_target)
+                        if uinfo and getattr(uinfo, "pk", None):
+                            target_uid = int(uinfo.pk)
+                    except Exception as ue:
+                        logger.debug(f"Resolve target user {clean_target} for RM image failed: {ue}")
+
+                if target_uid:
+                    try:
+                        dm_res = self.cl.direct_send_photo(path=local_img, user_ids=[target_uid])
+                        if effective_text:
+                            try:
+                                self.cl.direct_send(text=f"[RM 留言附圖] {effective_text}", user_ids=[target_uid])
+                            except Exception:
+                                pass
+                        image_delivery = {
+                            "sent": True,
+                            "mode": "dm_photo",
+                            "target_username": clean_target,
+                            "message_id": str(getattr(dm_res, "id", "") or ""),
+                        }
+                    except Exception as dme:
+                        logger.warning(f"RM image direct_send_photo failed, trying story mention: {dme}")
+
+                if not image_delivery.get("sent"):
+                    try:
+                        from instagrapi.types import StoryMedia, StoryMention, UserShort
+                        mentions = []
+                        if target_uid and clean_target:
+                            mentions.append(
+                                StoryMention(
+                                    user=UserShort(pk=str(target_uid), username=clean_target),
+                                    x=0.5,
+                                    y=0.85,
+                                    width=0.4,
+                                    height=0.1,
+                                )
+                            )
+                        st = self.cl.photo_upload_to_story(
+                            path=local_img,
+                            caption=effective_text,
+                            mentions=mentions,
+                            medias=[StoryMedia(media_pk=int(media_pk), x=0.5, y=0.5, width=0.6, height=0.6)] if str(media_pk).isdigit() else [],
+                        )
+                        image_delivery = {
+                            "sent": True,
+                            "mode": "story_mention",
+                            "target_username": clean_target,
+                            "story_pk": str(getattr(st, "pk", "") or ""),
+                        }
+                    except Exception as ste:
+                        image_delivery = {"sent": False, "error": str(ste)}
+
             return {
                 "ok": True,
                 "comment_pk": str(cmt.pk),
                 "text": cmt.text,
                 "media_pk": str(media_pk),
                 "reply_to": str(reply_to_comment_pk or ""),
+                "image_delivery": image_delivery,
                 "status": "posted",
             }
         except FeedbackRequired as e:
@@ -923,8 +1114,77 @@ class InstagramCore:
             logger.error(f"Failed to post comment to media {media_pk}: {e}")
             return {"ok": False, "error": str(e)}
 
+    def _extract_dm_message_media_and_files(self, m: Any) -> Dict[str, Any]:
+        """從單則 DM 訊息中提取圖片 URL、文件 URL 與分享的貼文/Reel 資訊"""
+        img_urls: List[str] = []
+        file_urls: List[str] = []
+        shared_media: Optional[Dict[str, Any]] = None
+        msg_text = str(getattr(m, "text", "") or "")
+
+        def _add_img(u: Any):
+            s = str(u or "").strip()
+            if s.startswith("http") and s not in img_urls:
+                img_urls.append(s)
+
+        def _add_file(u: Any):
+            s = str(u or "").strip()
+            if s.startswith("http") and s not in file_urls:
+                file_urls.append(s)
+
+        try:
+            extracted = self._extract_urls_from_text(msg_text)
+            for u in extracted["image_urls"]:
+                _add_img(u)
+            for u in extracted["file_urls"]:
+                _add_file(u)
+
+            raw_dict = m.dict() if hasattr(m, "dict") else (m if isinstance(m, dict) else getattr(m, "__dict__", {}))
+            if isinstance(raw_dict, dict):
+                for key in ("media", "visual_media"):
+                    med = raw_dict.get(key)
+                    if isinstance(med, dict):
+                        inner = med.get("media") if isinstance(med.get("media"), dict) else med
+                        _add_img(inner.get("thumbnail_url"))
+                        iv2 = inner.get("image_versions2") or {}
+                        if isinstance(iv2, dict):
+                            cands = iv2.get("candidates") or []
+                            if isinstance(cands, list) and len(cands) > 0 and isinstance(cands[0], dict):
+                                _add_img(cands[0].get("url"))
+
+                share_obj = raw_dict.get("media_share") or raw_dict.get("clip")
+                if isinstance(share_obj, dict):
+                    if isinstance(share_obj.get("clip"), dict):
+                        share_obj = share_obj.get("clip")
+                    parsed_share = self._parse_media_item(share_obj)
+                    if parsed_share:
+                        shared_media = parsed_share
+                        for u in parsed_share.get("image_urls") or []:
+                            _add_img(u)
+                        _add_img(parsed_share.get("thumbnail_url"))
+
+                xma = raw_dict.get("xma_share") or raw_dict.get("xma_media_share")
+                if isinstance(xma, list) and len(xma) > 0 and isinstance(xma[0], dict):
+                    xma = xma[0]
+                if isinstance(xma, dict):
+                    _add_img(xma.get("preview_url") or xma.get("playable_url"))
+                    target_url = str(xma.get("target_url") or xma.get("header_icon_url") or "")
+                    if target_url:
+                        ex2 = self._extract_urls_from_text(target_url)
+                        for u in ex2["image_urls"]:
+                            _add_img(u)
+                        for u in ex2["file_urls"]:
+                            _add_file(u)
+        except Exception as e:
+            logger.debug(f"_extract_dm_message_media_and_files notice: {e}")
+
+        return {
+            "image_urls": img_urls[:6],
+            "file_urls": file_urls[:4],
+            "shared_media": shared_media,
+        }
+
     def get_unread_dms(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """讀取未讀或最近的私訊線程（唯讀，自帶讀取微延遲）"""
+        """讀取未讀或最近的私訊線程（包含圖片、文件與分享貼文/Reel 內容，自帶讀取微延遲）"""
         self._apply_read_pacing(1.0, 2.5)
         logger.info(f"Fetching direct threads (limit={limit})...")
         threads = []
@@ -966,16 +1226,38 @@ class InstagramCore:
                     })
 
                 last_msg = None
+                recent_messages = []
                 messages = getattr(t, "messages", [])
                 if messages:
-                    m = messages[0]
-                    last_msg = {
-                        "id": str(getattr(m, "id", "")),
-                        "user_id": str(getattr(m, "user_id", "")),
-                        "text": str(getattr(m, "text", "") or ""),
-                        "timestamp": m.timestamp.isoformat() if hasattr(m, "timestamp") and m.timestamp else "",
-                        "is_outgoing": str(getattr(m, "user_id", "")) == current_user_id,
-                    }
+                    for idx, m in enumerate(messages[:6]):
+                        media_meta = self._extract_dm_message_media_and_files(m)
+                        raw_text = str(getattr(m, "text", "") or "").strip()
+                        item_type = str(getattr(m, "item_type", "") or "")
+                        if not raw_text:
+                            if media_meta.get("shared_media"):
+                                sm = media_meta["shared_media"]
+                                raw_text = f"[分享貼文/Reel @{sm.get('author_username', '')}: {(sm.get('caption') or '')[:120]}]"
+                            elif media_meta.get("image_urls"):
+                                raw_text = "[傳送了圖片]"
+                            elif media_meta.get("file_urls"):
+                                raw_text = "[傳送了文件]"
+                            elif item_type and item_type not in ("text", "placeholder"):
+                                raw_text = f"[{item_type}]"
+
+                        msg_obj = {
+                            "id": str(getattr(m, "id", "")),
+                            "user_id": str(getattr(m, "user_id", "")),
+                            "item_type": item_type,
+                            "text": raw_text,
+                            "timestamp": m.timestamp.isoformat() if hasattr(m, "timestamp") and m.timestamp else "",
+                            "is_outgoing": str(getattr(m, "user_id", "")) == current_user_id,
+                            "image_urls": media_meta.get("image_urls", []),
+                            "file_urls": media_meta.get("file_urls", []),
+                            "shared_media": media_meta.get("shared_media"),
+                        }
+                        recent_messages.append(msg_obj)
+                        if idx == 0:
+                            last_msg = msg_obj
 
                 is_unread = bool(getattr(t, "unread_count", 0) > 0)
                 if not is_unread and last_msg and not last_msg.get("is_outgoing"):
@@ -987,6 +1269,7 @@ class InstagramCore:
                     "users": thread_users,
                     "unread": is_unread,
                     "last_message": last_msg,
+                    "recent_messages": recent_messages,
                 })
             except Exception as err:
                 logger.warning(f"Error parsing thread {getattr(t, 'id', '')}: {err}")
@@ -999,10 +1282,13 @@ class InstagramCore:
         self,
         thread_id: str,
         text: str,
+        image_path: str = "",
+        image_url: str = "",
+        file_path: str = "",
         jitter_min: float = 6.0,
         jitter_max: float = 15.0,
     ) -> Dict[str, Any]:
-        """發送私訊到指定對話線程（包含防風控頻次檢查與熔斷）"""
+        """發送私訊（支援文字、圖片與檔案）到指定對話線程（包含防風控頻次檢查與熔斷）"""
         perm = self.anti_risk.check_write_permission("dm")
         if not perm.get("allowed"):
             return {
@@ -1014,15 +1300,37 @@ class InstagramCore:
 
         self._apply_jitter(jitter_min, jitter_max)
 
-        logger.info(f"Sending DM to thread {thread_id}: {text[:40]}...")
+        raw_img = (image_path or image_url or "").strip()
+        local_img = self._prepare_local_media_file(raw_img, suffix=".jpg") if raw_img else None
+        local_file = Path(file_path).expanduser().resolve() if file_path and os.path.exists(os.path.expanduser(file_path)) else None
+
+        logger.info(f"Sending DM to thread {thread_id} (has_img={bool(local_img)}, has_file={bool(local_file)}): {(text or '')[:40]}...")
         try:
-            result = self.cl.direct_send(text=text, thread_ids=[thread_id])
-            msg_id = getattr(result, "id", "") if hasattr(result, "id") else ""
+            msg_id = ""
+            image_sent = False
+            file_sent = False
+
+            if local_img and local_img.exists():
+                photo_res = self.cl.direct_send_photo(path=local_img, thread_ids=[thread_id])
+                msg_id = str(getattr(photo_res, "id", "") or msg_id)
+                image_sent = True
+
+            if local_file and local_file.exists() and hasattr(self.cl, "direct_send_file"):
+                file_res = self.cl.direct_send_file(path=local_file, thread_ids=[thread_id])
+                msg_id = str(getattr(file_res, "id", "") or msg_id)
+                file_sent = True
+
+            if (text or "").strip() or (not image_sent and not file_sent):
+                result = self.cl.direct_send(text=text or "👀", thread_ids=[thread_id])
+                msg_id = str(getattr(result, "id", "") or msg_id)
+
             self.anti_risk.record_action("dm", f"thread_id={thread_id}")
             return {
                 "ok": True,
                 "thread_id": thread_id,
                 "message_id": str(msg_id),
+                "image_sent": image_sent,
+                "file_sent": file_sent,
                 "status": "sent",
             }
         except FeedbackRequired as e:

@@ -2,8 +2,25 @@
  * src/tools/mcpTools.ts —— 向 DSH ctx.tools 註冊 Instagram MCP 標準工具
  */
 
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { InstagramMcpClient } from '../lib/mcp.js'
 import { InstagramMcpConfig } from '../config.js'
+
+function getFishMemoryDir(): string {
+  const dshHome = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || homedir(), '.dsh')
+  return join(dshHome, 'fish-memory')
+}
+
+function sanitizeMemoryText(raw: string, maxLen = 500): string {
+  return String(raw || '')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .replace(/<\s*\/?\s*(?:system|instruction|prompt|developer|assistant|tool_call|function_call)[^>]*>/gi, '[TAG]')
+    .replace(/(?:ignore\s+(?:all\s+)?(?:previous|above|prior)\s+instructions?|忽略(?:上述|前面|之前|所有)(?:所有)?(?:指令|規則|設定|限制))/gi, '[FILTERED]')
+    .trim()
+    .slice(0, maxLen)
+}
 
 export function registerMcpTools(
   ctx: any,
@@ -174,16 +191,19 @@ export function registerMcpTools(
     },
   })
 
-  // 5. 發表留言或回覆
+  // 5. 發表留言或回覆（支援傳送圖片到 RM）
   register({
     name: 'ig_post_comment',
-    description: '在特定貼文下發表新留言，或針對某留言進行巢狀回覆。',
+    description: '在特定貼文下發表新留言，或針對某留言進行巢狀回覆（RM），並支援附帶傳送圖片給目標用戶。',
     parameters: {
       type: 'object',
       properties: {
         media_pk: { type: 'string', description: '貼文 PK' },
         text: { type: 'string', description: '留言內容' },
         reply_to_comment_pk: { type: 'string', description: '要回覆的父留言 PK (可選)' },
+        image_path: { type: 'string', description: '選填，欲傳送到 RM 的本地圖片路徑或 data:image/...;base64' },
+        image_url: { type: 'string', description: '選填，欲傳送到 RM 的遠端圖片 URL 或 data:image/...;base64' },
+        target_username: { type: 'string', description: '選填，RM 互動的目標 Instagram 帳號' },
       },
       required: ['media_pk', 'text'],
     },
@@ -194,6 +214,9 @@ export function registerMcpTools(
         media_pk: args.media_pk,
         text: args.text,
         reply_to_comment_pk: args.reply_to_comment_pk,
+        image_path: args.image_path,
+        image_url: args.image_url,
+        target_username: args.target_username,
       })
     },
   })
@@ -201,7 +224,7 @@ export function registerMcpTools(
   // 6. 讀取未讀私訊線程
   register({
     name: 'ig_get_unread_dms',
-    description: '讀取未讀或最新的 Instagram Direct Messages (私訊) 對話線程。',
+    description: '讀取未讀或最新的 Instagram Direct Messages (私訊) 對話線程（包含圖片、文件與分享貼文/Reel 內容）。',
     parameters: {
       type: 'object',
       properties: {
@@ -215,15 +238,18 @@ export function registerMcpTools(
     },
   })
 
-  // 7. 發送私訊
+  // 7. 發送私訊（支援文字、圖片與檔案）
   register({
     name: 'ig_send_dm',
-    description: '發送 Instagram Direct Message 私訊給指定對話線程。',
+    description: '發送 Instagram Direct Message 私訊（支援文字、圖片與檔案）給指定對話線程。',
     parameters: {
       type: 'object',
       properties: {
         thread_id: { type: 'string', description: '私訊線程 ID' },
         text: { type: 'string', description: '訊息文字內容' },
+        image_path: { type: 'string', description: '選填，本地圖片路徑或 data:image/...;base64' },
+        image_url: { type: 'string', description: '選填，遠端圖片 URL 或 data:image/...;base64' },
+        file_path: { type: 'string', description: '選填，本地檔案路徑' },
       },
       required: ['thread_id', 'text'],
     },
@@ -233,6 +259,9 @@ export function registerMcpTools(
       return await client.igSendDm({
         thread_id: args.thread_id,
         text: args.text,
+        image_path: args.image_path,
+        image_url: args.image_url,
+        file_path: args.file_path,
       })
     },
   })
@@ -423,5 +452,134 @@ export function registerMcpTools(
     },
   })
 
-  log('✅ 已註冊 17 個 Instagram MCP 核心工具（含貼文/Reel 轉發與防風控熔斷管理）至 DSH Tools！')
+  // 18. 讀寫 dsh-fish-memory 記憶庫 (支援 DM / RM 對話紀錄與刷 Reel / 貼文感想寫入與讀取)
+  register({
+    name: 'ig_fish_memory',
+    description: '讀取或寫入 dsh-fish-memory 記憶庫，支援記錄或檢索 Instagram DM/RM 聊天紀錄、以及刷 Reel 與貼文的感想內容（具備社交隔離與防注入保護）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['read', 'write'],
+          description: '操作類型：read (讀取記憶) 或 write (寫入記憶)',
+        },
+        category: {
+          type: 'string',
+          enum: ['dm', 'rm', 'thought'],
+          description: '記憶分類：dm (私訊紀錄)、rm (貼文 @ 提及留言紀錄)、thought (刷 Reel 或貼文的感想內容)',
+        },
+        username: {
+          type: 'string',
+          description: '互動對象 Instagram 帳號（若為刷貼文感想可不填，預設使用主人帳號）',
+        },
+        user_text: {
+          type: 'string',
+          description: '寫入時：對方說的話，或被刷到的貼文/Reel 標題與內容摘要',
+        },
+        bot_reply: {
+          type: 'string',
+          description: '寫入時：機器人回覆的話，或對該 Reel/貼文的感想內容',
+        },
+        media_pk: {
+          type: 'string',
+          description: '選填，關聯的貼文或 Reel PK / 網址',
+        },
+        limit: {
+          type: 'number',
+          description: '讀取時回傳的最大筆數 (預設 10)',
+        },
+      },
+      required: ['action', 'category'],
+    },
+    execute: async (args: any) => {
+      const memDir = getFishMemoryDir()
+      if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
+      const cat = String(args.category || 'thought').toLowerCase()
+      const cleanUser = String(args.username || config.masterUsername || config.username || 'general')
+        .trim()
+        .replace(/^@/, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9._-]/g, '_') || 'general'
+      const fileName =
+        cat === 'dm'
+          ? `social_ig_dm_${cleanUser}.json`
+          : cat === 'rm'
+            ? `social_ig_rm_${cleanUser}.json`
+            : `social_ig_thoughts_${cleanUser}.json`
+      const filePath = join(memDir, fileName)
+
+      if (args.action === 'write') {
+        const now = Date.now()
+        const safeInput = sanitizeMemoryText(args.user_text || '', 500)
+        const safeThoughtOrReply = sanitizeMemoryText(args.bot_reply || '', 500)
+        const mediaPk = sanitizeMemoryText(args.media_pk || '', 120)
+
+        let doc: any = {
+          sessionKey: `social_ig_${cat}_${cleanUser}`,
+          channel: `instagram_${cat}`,
+          username: cleanUser,
+          isolatedFromMasterPrivateMemory: true,
+          updatedAt: now,
+          messages: [],
+        }
+        if (existsSync(filePath)) {
+          try {
+            doc = JSON.parse(readFileSync(filePath, 'utf-8'))
+            if (!Array.isArray(doc.messages)) doc.messages = []
+          } catch {}
+        }
+
+        if (cat === 'thought') {
+          doc.messages.push(
+            {
+              role: 'user',
+              content: `[刷IG貼文/Reel${mediaPk ? ` (${mediaPk})` : ''}] ${safeInput}`,
+              timestamp: now - 1,
+              mediaPk,
+            },
+            {
+              role: 'assistant',
+              content: safeThoughtOrReply,
+              timestamp: now,
+              mediaPk,
+            }
+          )
+        } else {
+          doc.messages.push(
+            {
+              role: 'user',
+              content: `@${cleanUser}: ${safeInput}`,
+              timestamp: now - 1,
+              mediaPk,
+            },
+            {
+              role: 'assistant',
+              content: safeThoughtOrReply,
+              timestamp: now,
+              mediaPk,
+            }
+          )
+        }
+        if (doc.messages.length > 60) doc.messages = doc.messages.slice(-60)
+        doc.updatedAt = now
+        writeFileSync(filePath, JSON.stringify(doc, null, 2), 'utf-8')
+        return { ok: true, action: 'write', category: cat, filePath, count: doc.messages.length }
+      }
+
+      const maxItems = Math.max(2, Math.min(40, Number(args.limit) || 10))
+      if (!existsSync(filePath)) {
+        return { ok: true, action: 'read', category: cat, messages: [] }
+      }
+      try {
+        const doc = JSON.parse(readFileSync(filePath, 'utf-8'))
+        const msgs = Array.isArray(doc?.messages) ? doc.messages.slice(-maxItems) : []
+        return { ok: true, action: 'read', category: cat, username: cleanUser, messages: msgs }
+      } catch (e: any) {
+        return { ok: false, error: e.message }
+      }
+    },
+  })
+
+  log('✅ 已註冊 18 個 Instagram MCP 核心工具（含貼文/Reel 轉發、圖片/文件傳收與 dsh-fish-memory 記憶讀寫）至 DSH Tools！')
 }

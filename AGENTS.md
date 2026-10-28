@@ -19,11 +19,12 @@
 | **`ig_login`** | 登入 Instagram 帳號或重新驗證 Session 快取 | `username`, `password`, `two_factor_code`, `proxy_url` |
 | **`ig_fuzzy_search_posts`** | **模糊搜尋貼文與 Reels 短片**（結合 `top_serp`、`reels_serp` 與公開創作者貼文，解決單純 Hashtag 搜尋為 0 的問題） | `query` (string, 必填), `limit` (number, 預設 10) |
 | **`ig_search_hashtag`** | 搜尋指定 Hashtag 標籤之最新貼文清單（內建模糊搜尋備援） | `hashtag` (string), `limit` (number) |
-| **`ig_get_post_context`** | 抓取指定貼文或 Reel 之完整內文、標題、無障礙視覺描述 (`accessibility_caption`)、音訊配樂 (`audio_info`)、字幕 (`video_subtitles`) 與留言（含巢狀子留言）上下文 | `media_pk` (string), `comment_limit` (number, 預設 15) |
+| **`ig_get_post_context`** | 抓取指定貼文或 Reel 之完整內文、標題、無障礙視覺描述 (`accessibility_caption`)、音訊配樂 (`audio_info`)、字幕 (`video_subtitles`)、附帶多模態圖片 (`image_urls`)、文件網址 (`file_urls`) 與留言（含巢狀子留言）上下文 | `media_pk` (string), `comment_limit` (number, 預設 15) |
 | **`ig_get_recent_mentions`** | 從 Instagram 通知收件匣 (`news/inbox`) 探索近期提及 (`@mention`) 或回覆機器人的貼文與 Reel PK 清單 | `limit` (number, 預設 20) |
-| **`ig_post_comment`** | 於指定貼文發表新留言，或對特定留言進行巢狀回覆 (受防風控保護) | `media_pk`, `text`, `reply_to_comment_pk`, `jitter_min`, `jitter_max` |
-| **`ig_get_unread_dms`** | 讀取最新或未讀之 Instagram 私訊對話線程（含陌生訊息要求 Pending Inbox） | `limit` (number) |
-| **`ig_send_dm`** | 發送 Instagram Direct Message 私訊給特定線程 (受防風控保護) | `thread_id`, `text`, `jitter_min`, `jitter_max` |
+| **`ig_post_comment`** | 於指定貼文發表新留言，支援巢狀回覆與**傳送圖片至 RM**（透過附帶圖片連動發送） | `media_pk`, `text`, `reply_to_comment_pk`, `image_path`, `image_url`, `target_username`, `jitter_min`, `jitter_max` |
+| **`ig_get_unread_dms`** | 讀取最新或未讀之 Instagram 私訊對話線程（支援讀取對話圖片與檔案） | `limit` (number) |
+| **`ig_send_dm`** | 發送 Instagram Direct Message 私訊給特定線程，**支援發送圖片與文件** | `thread_id`, `text`, `image_path`, `image_url`, `file_path`, `jitter_min`, `jitter_max` |
+| **`ig_fish_memory`** | **雙向讀寫 dsh-fish-memory 社交記憶庫**：支援讀取/寫入 DM 私訊對話、RM 貼文留言以及刷 Reel/貼文的感想內容，兼容 `messages` 與 `memories` 結構 | `action` (`read` \| `write`), `category` (`dm` \| `rm` \| `thought`), `target` (帳號或標籤), `content` (寫入文字), `media_pk`, `thought`, `role`, `tags`, `limit` |
 | **`ig_get_timeline_feed`** | 抓取使用者首頁動態牆 (Timeline Feed) 貼文清單 | `limit` (number) |
 | **`ig_get_user_medias`** | 指定帳號讀取最新發布之貼文與影片列表（唯讀） | `username` (string), `limit` (number) |
 | **`ig_get_user_clips`** | 指定帳號專門讀取連續短片 (Reels / Clips) | `username` (string), `limit` (number) |

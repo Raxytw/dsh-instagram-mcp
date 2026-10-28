@@ -190,15 +190,21 @@ def ig_post_comment(
     media_pk: str,
     text: str,
     reply_to_comment_pk: str = "",
+    image_path: str = "",
+    image_url: str = "",
+    target_username: str = "",
     jitter_min: float = 3.0,
     jitter_max: float = 6.0,
 ) -> str:
-    """在貼文下發布留言或針對特定留言進行巢狀子留言回覆。
+    """在貼文下發布留言或針對特定留言進行巢狀子留言回覆，並支援傳送圖片到 RM（透過連動私訊圖片或限動標註傳送圖片）。
 
     Args:
         media_pk: 貼文唯一識別碼
         text: 留言文字內容
         reply_to_comment_pk: 要回覆之留言 PK（若為新留言則留空）
+        image_path: 選填，要一併傳送到 RM 的本地圖片路徑或 data:image/...;base64
+        image_url: 選填，要一併傳送到 RM 的圖片 URL 或 data:image/...;base64
+        target_username: 選填，RM 互動的目標 Instagram 帳號（供附圖直傳或標註）
         jitter_min: 最小隨機等待秒數
         jitter_max: 最大隨機等待秒數
     """
@@ -206,6 +212,9 @@ def ig_post_comment(
         media_pk=media_pk,
         text=text,
         reply_to_comment_pk=reply_to_comment_pk or None,
+        image_path=_safe_str(image_path, ""),
+        image_url=_safe_str(image_url, ""),
+        target_username=_safe_str(target_username, ""),
         jitter_min=jitter_min,
         jitter_max=jitter_max,
     )
@@ -214,7 +223,7 @@ def ig_post_comment(
 
 @mcp.tool()
 def ig_get_unread_dms(limit: int = 10) -> str:
-    """讀取未讀或最新的私訊對話線程。
+    """讀取未讀或最新的私訊對話線程（包含圖片、文件與分享貼文/Reel 內容）。
 
     Args:
         limit: 抓取對話線程數量上限
@@ -227,20 +236,29 @@ def ig_get_unread_dms(limit: int = 10) -> str:
 def ig_send_dm(
     thread_id: str,
     text: str,
+    image_path: str = "",
+    image_url: str = "",
+    file_path: str = "",
     jitter_min: float = 3.0,
     jitter_max: float = 6.0,
 ) -> str:
-    """發送私訊到指定對話線程。
+    """發送私訊（支援文字、圖片與檔案）到指定對話線程。
 
     Args:
         thread_id: 私訊對話線程 ID
         text: 回覆訊息內容
+        image_path: 選填，本地圖片路徑或 data:image/...;base64
+        image_url: 選填，遠端圖片 URL 或 data:image/...;base64
+        file_path: 選填，本地檔案路徑
         jitter_min: 最小隨機等待秒數
         jitter_max: 最大隨機等待秒數
     """
     res = core_handler.send_dm(
         thread_id=thread_id,
         text=text,
+        image_path=_safe_str(image_path, ""),
+        image_url=_safe_str(image_url, ""),
+        file_path=_safe_str(file_path, ""),
         jitter_min=jitter_min,
         jitter_max=jitter_max,
     )

@@ -258,9 +258,12 @@ export class InstagramMcpClient {
     media_pk: string
     text: string
     reply_to_comment_pk?: string
+    image_path?: string
+    image_url?: string
+    target_username?: string
     jitter_min?: number
     jitter_max?: number
-  }): Promise<{ ok: boolean; comment_pk?: string; error?: string; in_cooldown?: boolean; cooldown_remaining_sec?: number }> {
+  }): Promise<{ ok: boolean; comment_pk?: string; image_delivery?: any; error?: string; in_cooldown?: boolean; cooldown_remaining_sec?: number }> {
     const isTopLevelComment = !params.reply_to_comment_pk || !String(params.reply_to_comment_pk).trim()
     const cleanPk = String(params.media_pk || '').split('_')[0].trim()
     const dshHome = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || homedir(), '.dsh')
@@ -300,7 +303,7 @@ export class InstagramMcpClient {
       } catch {}
     }
 
-    return this.callTool('ig_post_comment', { ...params, media_pk: cleanPk || params.media_pk }, 45000)
+    return this.callTool('ig_post_comment', { ...params, media_pk: cleanPk || params.media_pk }, 60000)
   }
 
   public async igGetUnreadDms(limit = 10): Promise<{ ok: boolean; threads: InstagramDmThread[] }> {
@@ -310,10 +313,13 @@ export class InstagramMcpClient {
   public async igSendDm(params: {
     thread_id: string
     text: string
+    image_path?: string
+    image_url?: string
+    file_path?: string
     jitter_min?: number
     jitter_max?: number
-  }): Promise<{ ok: boolean; message_id?: string; error?: string; in_cooldown?: boolean; cooldown_remaining_sec?: number }> {
-    return this.callTool('ig_send_dm', params, 45000)
+  }): Promise<{ ok: boolean; message_id?: string; image_sent?: boolean; file_sent?: boolean; error?: string; in_cooldown?: boolean; cooldown_remaining_sec?: number }> {
+    return this.callTool('ig_send_dm', params, 60000)
   }
 
   public async igGetUserMedias(username: string, limit = 10): Promise<import('../types.js').InstagramUserMediasResult> {

@@ -24,6 +24,7 @@ export interface InstagramPost {
   is_carousel?: boolean
   thumbnail_url?: string
   image_urls?: string[]
+  file_urls?: string[]
   video_url?: string
   user: {
     pk: string
@@ -48,6 +49,8 @@ export interface InstagramComment {
   parent_comment_pk?: string
   parent_comment_user?: string
   parent_comment_text?: string
+  image_urls?: string[]
+  file_urls?: string[]
 }
 
 export interface InstagramRecentMentionsResult {
@@ -71,18 +74,25 @@ export interface InstagramPostContext {
   error?: string
 }
 
+export interface InstagramDmMessage {
+  id: string
+  user_id: string
+  item_type?: string
+  text: string
+  timestamp: string
+  is_outgoing: boolean
+  image_urls?: string[]
+  file_urls?: string[]
+  shared_media?: any
+}
+
 export interface InstagramDmThread {
   thread_id: string
   title: string
   users: Array<{ pk: string; username: string; full_name: string }>
   unread: boolean
-  last_message?: {
-    id: string
-    user_id: string
-    text: string
-    timestamp: string
-    is_outgoing: boolean
-  }
+  last_message?: InstagramDmMessage
+  recent_messages?: InstagramDmMessage[]
 }
 
 export interface InstagramLoginResult {
