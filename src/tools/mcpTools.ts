@@ -389,5 +389,39 @@ export function registerMcpTools(
     },
   })
 
-  log('✅ 已註冊 16 個 Instagram MCP 核心工具（含防風控熔斷管理）至 DSH Tools！')
+  // 17. 轉發貼文或連續短片 (Repost Media to Story / Feed / DM)
+  register({
+    name: 'ig_repost_media',
+    description: '轉發指定的 Instagram 貼文或 Reel（支援限時動態 Story 卡片轉發、動態牆/Reels 貼文轉發、或私訊 DM 卡片轉發），可在轉發文案中 @ 用戶並附上對該貼文/Reel 內容的感想。',
+    parameters: {
+      type: 'object',
+      properties: {
+        media_pk: { type: 'string', description: '貼文/Reel 的 PK、Shortcode 或完整 Instagram 網址' },
+        caption: { type: 'string', description: '轉發文案（可包含 @用戶 與對該 Reel/貼文的感想）' },
+        repost_mode: {
+          type: 'string',
+          enum: ['story', 'feed', 'dm'],
+          description: '轉發方式：story (限時動態卡片，預設)、feed (動態牆/Reels 貼文)、dm (私訊卡片)',
+        },
+        mention_users: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '要在轉發中標註 (@) 的 Instagram 帳號清單（不需加 @）',
+        },
+      },
+      required: ['media_pk'],
+    },
+    execute: async (args: any) => {
+      const client = getMcpClient()
+      if (!client || !client.ready) return { ok: false, error: 'FastMCP 尚未就緒' }
+      return await client.igRepostMedia({
+        media_pk: String(args.media_pk || ''),
+        caption: String(args.caption || ''),
+        repost_mode: args.repost_mode || 'story',
+        mention_users: Array.isArray(args.mention_users) ? args.mention_users : [],
+      })
+    },
+  })
+
+  log('✅ 已註冊 17 個 Instagram MCP 核心工具（含貼文/Reel 轉發與防風控熔斷管理）至 DSH Tools！')
 }

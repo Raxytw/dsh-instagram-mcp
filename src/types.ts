@@ -168,3 +168,21 @@ export interface InstagramAntiRiskStatus {
   last_write_timestamp: number
 }
 
+export interface InstagramRepostResult {
+  ok: boolean
+  repost_mode?: 'story' | 'feed' | 'dm' | string
+  source_media_pk?: string
+  source_url?: string
+  source_author?: string
+  repost_pk?: string
+  repost_code?: string
+  repost_url?: string
+  thread_id?: string
+  caption?: string
+  mentioned_users?: string[]
+  status?: string
+  error?: string
+  in_cooldown?: boolean
+  cooldown_remaining_sec?: number
+}
+

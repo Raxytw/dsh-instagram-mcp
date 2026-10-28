@@ -31,6 +31,7 @@
 | **`ig_search_users`** | 搜尋 Instagram 使用者帳號 | `query` (string), `limit` (number) |
 | **`ig_search_tags`** | 搜尋 Instagram 標籤名稱與貼文數 | `query` (string), `limit` (number) |
 | **`ig_like_media`** | 對指定的 Instagram 貼文按讚 (受防風控保護) | `media_pk` (string) |
+| **`ig_repost_media`** | **轉發貼文或連續短片 (Reel)**：支援限時動態 Story 卡片轉發（自動渲染 9:16 縮圖卡片、附上 `StoryMedia` 原貼文跳轉貼紙與 `StoryMention` 標註貼紙）、動態牆/Reels 貼文轉發 (`feed`) 與私訊卡片轉發 (`dm`)，可在轉發文案中 `@用戶` 並填寫對該 Reel/貼文的感想 | `media_pk` (PK/Shortcode/網址), `caption` (轉發文案含 `@用戶` 與感想), `repost_mode` (`story` \| `feed` \| `dm`), `mention_users` (string[]) |
 | **`ig_get_anti_risk_status`** | 查詢 Instagram 防風控熔斷狀態、冷卻剩餘秒數與小時寫入計數 | 無 |
 | **`ig_reset_anti_risk_cooldown`** | 手動解除防風控冷卻保護狀態 | 無 |
 

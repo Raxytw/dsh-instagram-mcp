@@ -1133,3 +1133,476 @@ class InstagramCore:
         """手動解除防風控熔斷冷卻狀態"""
         self.anti_risk.reset_cooldown()
         return {"ok": True, "message": "已成功解除防風控冷卻狀態"}
+
+    def resolve_media_pk(self, media_pk_or_url: str) -> str:
+        """將貼文/Reel 的 PK、Shortcode 或完整 Instagram 網址解析為純數字 Media PK"""
+        raw = str(media_pk_or_url or "").strip()
+        if not raw:
+            return ""
+        # 1. 若為純數字或 pk_userid 格式
+        first_part = raw.split("_")[0].strip()
+        if first_part.isdigit():
+            return first_part
+        # 2. 若為完整網址 (https://www.instagram.com/reel/xxx/ 或 /p/xxx/)
+        if "instagram.com/" in raw or raw.startswith("http"):
+            try:
+                return str(self.cl.media_pk_from_url(raw))
+            except Exception as e:
+                logger.debug(f"media_pk_from_url fallback: {e}")
+                import re as _re
+                m = _re.search(r"/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)", raw)
+                if m:
+                    raw = m.group(1)
+        # 3. 視為 Shortcode 解析
+        try:
+            return str(self.cl.media_pk_from_code(raw.strip("/")))
+        except Exception as e:
+            logger.warning(f"Failed to resolve media_pk from '{media_pk_or_url}': {e}")
+            return ""
+
+    def _render_repost_story_canvas(
+        self,
+        thumbnail_url: str,
+        author_username: str,
+        caption_text: str,
+        mention_usernames: List[str],
+        is_reel: bool = False,
+    ):
+        """使用 Pillow 繪製 9:16 (1080x1920) 質感限時動態轉發背景圖（含原貼文縮圖、@用戶標記與感想文案）"""
+        import os
+        import tempfile
+        import urllib.request
+        from io import BytesIO
+        from pathlib import Path
+        from PIL import Image, ImageDraw, ImageFont
+
+        W, H = 1080, 1920
+        canvas = Image.new("RGB", (W, H), (18, 20, 28))
+        draw = ImageDraw.Draw(canvas)
+
+        # 繪製深色柔和漸層背景與卡片底框
+        for y in range(H):
+            r = int(16 + (y / H) * 14)
+            g = int(18 + (y / H) * 18)
+            b = int(28 + (y / H) * 26)
+            draw.line([(0, y), (W, y)], fill=(r, g, b))
+
+        # 載入中文字型 (Windows 微軟正黑體 / macOS PingFang / Linux Noto)
+        font_Paths = [
+            r"C:\Windows\Fonts\msjhbd.ttc",
+            r"C:\Windows\Fonts\msjh.ttc",
+            r"C:\Windows\Fonts\simhei.ttf",
+            "/System/Library/Fonts/PingFang.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        ]
+        font_path = next((p for p in font_Paths if os.path.exists(p)), None)
+
+        def get_font(size: int):
+            if font_path:
+                try:
+                    return ImageFont.truetype(font_path, size)
+                except Exception:
+                    pass
+            return ImageFont.load_default()
+
+        font_header = get_font(34)
+        font_body = get_font(38)
+        font_mention = get_font(36)
+
+        # 1. 上半部繪製原貼文/Reel 縮圖預覽區 (對應 StoryMedia 可點擊貼紙位置 x=0.5, y=0.38)
+        card_x1, card_y1, card_x2, card_y2 = 90, 160, 990, 1180
+        draw.rounded_rectangle(
+            [card_x1, card_y1, card_x2, card_y2],
+            radius=36,
+            fill=(28, 32, 44),
+            outline=(68, 76, 102),
+            width=2,
+        )
+
+        badge_label = "🔁 REEL 轉發分享" if is_reel else "🔁 貼文轉發分享"
+        header_str = f"{badge_label}  •  @{author_username}" if author_username else badge_label
+        draw.text((card_x1 + 36, card_y1 + 26), header_str, font=font_header, fill=(180, 195, 230))
+
+        if thumbnail_url:
+            try:
+                req = urllib.request.Request(thumbnail_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    img_bytes = resp.read()
+                thumb = Image.open(BytesIO(img_bytes)).convert("RGB")
+                target_w = 828
+                target_h = 880
+                thumb.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
+                paste_x = card_x1 + (900 - thumb.width) // 2
+                paste_y = card_y1 + 92 + (target_h - thumb.height) // 2
+                canvas.paste(thumb, (paste_x, paste_y))
+            except Exception as img_err:
+                logger.debug(f"Story thumbnail render fallback: {img_err}")
+
+        # 2. 下半部繪製「轉發文案（含 @用戶 與對該 Reel/貼文的感想）」卡片區
+        thought_y1 = 1230
+        thought_y2 = 1780
+        draw.rounded_rectangle(
+            [90, thought_y1, 990, thought_y2],
+            radius=32,
+            fill=(26, 30, 42),
+            outline=(88, 130, 225),
+            width=2,
+        )
+
+        # 自動斷行排版感想文字
+        clean_text = (caption_text or "").strip()
+        lines: List[str] = []
+        for para in clean_text.splitlines():
+            para = para.strip()
+            if not para:
+                continue
+            buf = ""
+            for ch in para:
+                buf += ch
+                # 約每行 21 個中文字寬度換行
+                if len(buf) >= 21:
+                    lines.append(buf)
+                    buf = ""
+            if buf:
+                lines.append(buf)
+            if len(lines) >= 7:
+                break
+
+        text_y = thought_y1 + 42
+        for line in lines[:7]:
+            draw.text((132, text_y), line, font=font_body, fill=(242, 245, 252))
+            text_y += 54
+
+        # 3. 底部繪製醒目的 @mention 標籤提示區 (對應 StoryMention 位置 y=0.86)
+        if mention_usernames:
+            mention_line = "  ".join([f"@{u.lstrip('@')}" for u in mention_usernames[:4]])
+            draw.text((132, thought_y2 - 70), mention_line, font=font_mention, fill=(115, 185, 255))
+
+        temp_file = tempfile.NamedTemporaryFile(prefix="dsh_ig_repost_story_", suffix=".jpg", delete=False)
+        temp_file.close()
+        out_path = Path(temp_file.name)
+        canvas.save(out_path, format="JPEG", quality=94)
+        return out_path
+
+    def repost_media(
+        self,
+        media_pk_or_url: str,
+        caption: str = "",
+        mention_users: Optional[List[str]] = None,
+        repost_mode: str = "story",
+        include_credit: bool = True,
+        jitter_min: float = 5.0,
+        jitter_max: float = 12.0,
+    ) -> Dict[str, Any]:
+        """轉發指定的 Instagram 貼文或 Reel，支援在轉發文案中 @用戶 並填寫對該貼文/Reel 內容的感想。
+
+        Args:
+            media_pk_or_url: 貼文/Reel 的 Media PK、Shortcode 或完整網址
+            caption: 轉發文案（可包含 @用戶 與對這則 Reel/貼文內容的感想）
+            mention_users: 欲在轉發時 @標記 的 Instagram 帳號清單（可不帶 @）
+            repost_mode: 轉發模式：
+                - "story" (預設)：轉發至限時動態（含可點擊跳轉原貼文的 StoryMedia 貼紙 + StoryMention @用戶通知 + 感想文字視覺卡片）
+                - "feed"：下載原貼文/Reel 並轉發至動態牆/Reels（附上感想文案、@用戶、Usertag 標記與原創作者出處）
+                - "dm"：將該貼文/Reel 轉發分享至目標 @用戶 的私訊並附上感想文字
+            include_credit: 動態牆轉發時是否自動附上原創作者標註 (預設 True)
+            jitter_min: 防風控最小隨機延遲秒數
+            jitter_max: 防風控最大隨機延遲秒數
+        """
+        perm = self.anti_risk.check_write_permission("repost")
+        if not perm.get("allowed"):
+            return {
+                "ok": False,
+                "in_cooldown": perm.get("in_cooldown", False),
+                "cooldown_remaining_sec": perm.get("remaining_seconds", 0),
+                "error": perm.get("reason", "防風控阻絕"),
+            }
+
+        clean_pk = self.resolve_media_pk(media_pk_or_url)
+        if not clean_pk:
+            return {
+                "ok": False,
+                "error": f"無法解析貼文或 Reel 識別碼: {media_pk_or_url}",
+            }
+
+        # 1. 讀取原貼文或 Reel 的完整資訊
+        ctx_res = self.get_post_context(clean_pk, comment_limit=5)
+        media_data = ctx_res.get("media") if isinstance(ctx_res, dict) else None
+        if not media_data or not isinstance(media_data, dict):
+            return {
+                "ok": False,
+                "media_pk": clean_pk,
+                "error": f"無法讀取原貼文/Reel ({clean_pk}) 的媒體資訊",
+            }
+
+        orig_author = str((media_data.get("user") or {}).get("username") or "")
+        orig_author_pk = str((media_data.get("user") or {}).get("pk") or "")
+        is_reel = bool(media_data.get("is_reel"))
+        is_video = bool(media_data.get("is_video"))
+        thumb_url = str(
+            media_data.get("thumbnail_url")
+            or ((media_data.get("image_urls") or [""])[0] if media_data.get("image_urls") else "")
+        )
+        video_url = str(media_data.get("video_url") or "")
+        orig_url = str(media_data.get("url") or f"https://www.instagram.com/p/{media_data.get('code', '')}/")
+
+        # 2. 整理要 @ 的用戶清單與轉發感想文案
+        import re as _re
+
+        clean_mentions: List[str] = []
+        for u in mention_users or []:
+            cu = str(u or "").lstrip("@").strip()
+            if cu and cu.lower() not in [x.lower() for x in clean_mentions]:
+                clean_mentions.append(cu)
+
+        # 從 caption 中也提取已經寫入的 @username
+        caption_str = str(caption or "").strip()
+        for m_user in _re.findall(r"@([A-Za-z0-9._]+)", caption_str):
+            if m_user and m_user.lower() not in [x.lower() for x in clean_mentions]:
+                clean_mentions.append(m_user)
+
+        # 確保所有指定的 mention_users 都有出現在轉發文案裡
+        missing_prefix = [
+            f"@{u}" for u in clean_mentions if f"@{u.lower()}" not in caption_str.lower()
+        ]
+        if missing_prefix:
+            full_caption = f"{' '.join(missing_prefix)} {caption_str}".strip()
+        else:
+            full_caption = caption_str
+
+        # 解析被 @ 用戶的 UserShort 資訊（供 StoryMention、Usertag 與 DM 轉發使用）
+        from instagrapi.types import StoryMedia, StoryMention, UserShort, Usertag
+
+        resolved_users: List[UserShort] = []
+        for uname in clean_mentions[:5]:
+            try:
+                u_info = self.cl.user_info_by_username_v1(uname)
+                if u_info and getattr(u_info, "pk", None):
+                    resolved_users.append(
+                        UserShort(
+                            pk=str(u_info.pk),
+                            username=str(u_info.username or uname),
+                            full_name=str(getattr(u_info, "full_name", "") or ""),
+                        )
+                    )
+                    continue
+            except Exception:
+                pass
+            try:
+                searched = self.cl.search_users(uname)
+                for su in searched or []:
+                    if str(getattr(su, "username", "")).lower() == uname.lower():
+                        resolved_users.append(
+                            UserShort(
+                                pk=str(su.pk),
+                                username=str(su.username),
+                                full_name=str(getattr(su, "full_name", "") or ""),
+                            )
+                        )
+                        break
+            except Exception:
+                pass
+
+        self._apply_jitter(jitter_min, jitter_max)
+        mode = str(repost_mode or "story").lower().strip()
+
+        try:
+            # ==================================================================
+            # 模式 A: 限時動態轉發 (Story Reshare + @用戶 Mention + 感想文字卡片)
+            # ==================================================================
+            if mode in ("story", "reshare", "story_reshare"):
+                bg_path = None
+                try:
+                    bg_path = self._render_repost_story_canvas(
+                        thumbnail_url=thumb_url,
+                        author_username=orig_author,
+                        caption_text=full_caption,
+                        mention_usernames=clean_mentions,
+                        is_reel=is_reel,
+                    )
+                    story_mentions = [
+                        StoryMention(
+                            user=u_short,
+                            x=0.5,
+                            y=0.86,
+                            width=0.55,
+                            height=0.1,
+                        )
+                        for u_short in resolved_users
+                    ]
+                    story_media = StoryMedia(
+                        media_pk=int(clean_pk),
+                        user_id=int(orig_author_pk) if orig_author_pk.isdigit() else None,
+                        x=0.5,
+                        y=0.38,
+                        width=0.82,
+                        height=0.52,
+                    )
+                    story_obj = self.cl.photo_upload_to_story(
+                        bg_path,
+                        caption=full_caption,
+                        mentions=story_mentions,
+                        medias=[story_media],
+                    )
+                    story_pk = str(getattr(story_obj, "pk", "") or getattr(story_obj, "id", ""))
+                    self.anti_risk.record_action("repost_story", f"media_pk={clean_pk}")
+                    return {
+                        "ok": True,
+                        "repost_mode": "story",
+                        "source_media_pk": clean_pk,
+                        "source_url": orig_url,
+                        "source_author": orig_author,
+                        "repost_pk": story_pk,
+                        "caption": full_caption,
+                        "mentioned_users": clean_mentions,
+                        "status": "reposted_to_story",
+                    }
+                finally:
+                    if bg_path:
+                        try:
+                            bg_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+
+            # ==================================================================
+            # 模式 B: 動態牆 / Reels 貼文轉發 (Feed / Reel Repost + @用戶 + 感想文案)
+            # ==================================================================
+            elif mode in ("feed", "post", "reel"):
+                import tempfile
+                import urllib.request
+                from pathlib import Path
+
+                feed_caption = full_caption
+                if include_credit and orig_author and f"@{orig_author.lower()}" not in feed_caption.lower():
+                    feed_caption = f"{feed_caption}\n\n🔁 轉發自 @{orig_author}".strip()
+
+                usertags = [
+                    Usertag(user=u_short, x=0.5, y=0.5)
+                    for u_short in resolved_users
+                ]
+
+                tmp_media_path = None
+                try:
+                    if is_video and video_url:
+                        tmp_f = tempfile.NamedTemporaryFile(prefix="dsh_ig_repost_vid_", suffix=".mp4", delete=False)
+                        tmp_f.close()
+                        tmp_media_path = Path(tmp_f.name)
+                        req = urllib.request.Request(video_url, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(req, timeout=25) as resp:
+                            tmp_media_path.write_bytes(resp.read())
+
+                        try:
+                            uploaded = self.cl.clip_upload(
+                                tmp_media_path,
+                                caption=feed_caption,
+                                usertags=usertags,
+                            )
+                        except Exception:
+                            uploaded = self.cl.video_upload(
+                                tmp_media_path,
+                                caption=feed_caption,
+                                usertags=usertags,
+                            )
+                    else:
+                        if not thumb_url:
+                            return {"ok": False, "error": "原貼文無可用的圖片或影片 URL 可供下載轉發"}
+                        tmp_f = tempfile.NamedTemporaryFile(prefix="dsh_ig_repost_img_", suffix=".jpg", delete=False)
+                        tmp_f.close()
+                        tmp_media_path = Path(tmp_f.name)
+                        req = urllib.request.Request(thumb_url, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(req, timeout=15) as resp:
+                            tmp_media_path.write_bytes(resp.read())
+
+                        uploaded = self.cl.photo_upload(
+                            tmp_media_path,
+                            caption=feed_caption,
+                            usertags=usertags,
+                        )
+
+                    new_pk = str(getattr(uploaded, "pk", "") or getattr(uploaded, "id", ""))
+                    new_code = str(getattr(uploaded, "code", "") or "")
+                    self.anti_risk.record_action("repost_feed", f"media_pk={clean_pk}->new_pk={new_pk}")
+                    return {
+                        "ok": True,
+                        "repost_mode": "feed",
+                        "source_media_pk": clean_pk,
+                        "source_url": orig_url,
+                        "source_author": orig_author,
+                        "repost_pk": new_pk,
+                        "repost_code": new_code,
+                        "repost_url": f"https://www.instagram.com/p/{new_code}/" if new_code else "",
+                        "caption": feed_caption,
+                        "mentioned_users": clean_mentions,
+                        "status": "reposted_to_feed",
+                    }
+                finally:
+                    if tmp_media_path:
+                        try:
+                            tmp_media_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        thumb_sidecar = Path(f"{tmp_media_path}.jpg")
+                        if thumb_sidecar.exists():
+                            try:
+                                thumb_sidecar.unlink(missing_ok=True)
+                            except Exception:
+                                pass
+
+            # ==================================================================
+            # 模式 C: 私訊卡片轉發 (Direct Media Share + @用戶與對該貼文/Reel的感想)
+            # ==================================================================
+            elif mode in ("dm", "direct"):
+                if not resolved_users:
+                    return {
+                        "ok": False,
+                        "error": "私訊轉發模式 (dm) 需要至少指定一位有效的目標 @用戶 (mention_users)",
+                    }
+                recipient_ids = [int(u.pk) for u in resolved_users if str(u.pk).isdigit()]
+                dm_share = self.cl.direct_media_share(
+                    media_id=clean_pk,
+                    user_ids=recipient_ids,
+                    media_type="video" if is_video else "photo",
+                )
+                thread_id = str(getattr(dm_share, "thread_id", "") or "")
+                if full_caption:
+                    if thread_id:
+                        self.cl.direct_send(text=full_caption, thread_ids=[int(thread_id)] if thread_id.isdigit() else [thread_id])
+                    else:
+                        self.cl.direct_send(text=full_caption, user_ids=recipient_ids)
+                self.anti_risk.record_action("repost_dm", f"media_pk={clean_pk}")
+                return {
+                    "ok": True,
+                    "repost_mode": "dm",
+                    "source_media_pk": clean_pk,
+                    "source_url": orig_url,
+                    "source_author": orig_author,
+                    "thread_id": thread_id,
+                    "caption": full_caption,
+                    "mentioned_users": clean_mentions,
+                    "status": "reposted_to_dm",
+                }
+
+            else:
+                return {
+                    "ok": False,
+                    "error": f"不支援的 repost_mode: {repost_mode}（請使用 'story'、'feed' 或 'dm'）",
+                }
+
+        except FeedbackRequired as e:
+            self.anti_risk.trigger_cooldown(30, f"FeedbackRequired (轉發觸發 Action Blocked): {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 1800, "error": f"Instagram 功能受限 (Action Blocked)：{e}"}
+        except PleaseWaitFewMinutes as e:
+            self.anti_risk.trigger_cooldown(15, f"PleaseWaitFewMinutes (轉發頻率過快): {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 900, "error": f"Instagram 頻率管制：{e}"}
+        except RateLimitError as e:
+            self.anti_risk.trigger_cooldown(20, f"RateLimitError: {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 1200, "error": f"Instagram 速率受限：{e}"}
+        except SentryBlock as e:
+            self.anti_risk.trigger_cooldown(60, f"SentryBlock: {e}")
+            return {"ok": False, "in_cooldown": True, "cooldown_remaining_sec": 3600, "error": f"Instagram Sentry 防護阻擋：{e}"}
+        except ChallengeRequired as e:
+            return {"ok": False, "challenge_required": True, "error": f"Instagram 安全挑戰 (Challenge Required)：{e}"}
+        except LoginRequired as e:
+            return {"ok": False, "login_required": True, "error": f"Instagram 登入憑證失效 (Login Required)：{e}"}
+        except Exception as e:
+            logger.error(f"Failed to repost media {clean_pk} (mode={mode}): {e}")
+            return {"ok": False, "media_pk": clean_pk, "error": str(e)}

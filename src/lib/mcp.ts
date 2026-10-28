@@ -344,6 +344,18 @@ export class InstagramMcpClient {
     return this.callTool('ig_like_media', { media_pk }, 30000)
   }
 
+  public async igRepostMedia(params: {
+    media_pk: string
+    caption?: string
+    mention_users?: string[] | string
+    repost_mode?: 'story' | 'feed' | 'dm' | string
+    include_credit?: boolean
+    jitter_min?: number
+    jitter_max?: number
+  }): Promise<import('../types.js').InstagramRepostResult> {
+    return this.callTool('ig_repost_media', params, 90000)
+  }
+
   public async igGetAntiRiskStatus(): Promise<{ ok: boolean; anti_risk: import('../types.js').InstagramAntiRiskStatus }> {
     return this.callTool('ig_get_anti_risk_status', {}, 20000)
   }

@@ -270,6 +270,46 @@ def ig_like_media(media_pk: str) -> str:
 
 
 @mcp.tool()
+def ig_repost_media(
+    media_pk: str,
+    caption: str = "",
+    mention_users: Any = None,
+    repost_mode: str = "story",
+    include_credit: bool = True,
+    jitter_min: float = 5.0,
+    jitter_max: float = 12.0,
+) -> str:
+    """轉發指定的 Instagram 貼文或 Reel，支援在轉發文案中 @用戶 並填寫對該貼文/Reel 內容的感想。
+
+    Args:
+        media_pk: 貼文或 Reel 的唯一識別碼 (PK)、Shortcode 或完整 Instagram 網址
+        caption: 轉發文案（可包含 @用戶 與對這則 Reel/貼文內容的感想）
+        mention_users: 欲在轉發文案中 @標記 的 Instagram 帳號清單（字串陣列或逗號分隔字串）
+        repost_mode: 轉發模式 ('story' 限時動態轉發, 'feed' 動態牆/Reels 貼文轉發, 'dm' 私訊卡片轉發)
+        include_credit: 動態牆轉發時是否自動附上原創作者標註 (預設 True)
+        jitter_min: 最小隨機等待秒數
+        jitter_max: 最大隨機等待秒數
+    """
+    parsed_mentions = []
+    if isinstance(mention_users, list):
+        parsed_mentions = [str(u).strip() for u in mention_users if str(u).strip()]
+    elif isinstance(mention_users, str) and mention_users.strip():
+        import re as _re
+        parsed_mentions = [u.strip() for u in _re.split(r"[,，\s]+", mention_users) if u.strip()]
+
+    res = core_handler.repost_media(
+        media_pk_or_url=_safe_str(media_pk, ""),
+        caption=_safe_str(caption, ""),
+        mention_users=parsed_mentions,
+        repost_mode=_safe_str(repost_mode, "story") or "story",
+        include_credit=bool(include_credit),
+        jitter_min=float(jitter_min or 5.0),
+        jitter_max=float(jitter_max or 12.0),
+    )
+    return json.dumps(res, ensure_ascii=False)
+
+
+@mcp.tool()
 def ig_get_anti_risk_status() -> str:
     """獲取 Instagram 防風控安全狀態（熔斷冷卻倒數、最近一小時寫入次數等）。"""
     status = core_handler.get_anti_risk_status()
